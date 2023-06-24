@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration status="INFO">
+    <appenders>
+        <console name="console" target="SYSTEM_OUT">
+            <patternlayout pattern="%date{ABSOLUTE} [%highlight{%-5level}] %c{1.}:%L :: %msg%n"/>
+        </console>
+    </appenders>
+    <loggers>
+        <root level="TRACE">
+            <appenderref ref="console"/>
+        </root>
+    </loggers>
+</configuration>
