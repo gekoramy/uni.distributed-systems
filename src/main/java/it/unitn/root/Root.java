@@ -4,7 +4,9 @@ import akka.actor.typed.ActorRef;
 import akka.actor.typed.Behavior;
 import akka.actor.typed.javadsl.Behaviors;
 import it.unitn.node.Node;
+import org.eclipse.collections.api.factory.Lists;
 import org.eclipse.collections.api.factory.primitive.IntObjectMaps;
+import org.eclipse.collections.api.factory.primitive.IntSets;
 import org.eclipse.collections.api.map.primitive.ImmutableIntObjectMap;
 import org.eclipse.collections.api.set.primitive.ImmutableIntSet;
 
@@ -23,6 +25,8 @@ public interface Root {
     sealed interface Event extends Msg {}
 
     record Join(int who, int with) implements Cmd {}
+
+    record Crash(int... who) implements Cmd {}
 
     record Gone(int k) implements Event {}
 
@@ -88,6 +92,24 @@ public interface Root {
 
                     final var key2node = s.key2node().newWithKeyValue(x.who(), who);
                     yield busy(new State(key2node));
+
+                }
+
+                case Crash x -> {
+
+                    final var who = IntSets.immutable.with(x.who());
+                    final var missing = who.difference(s.key2node().keySet());
+
+                    if (!missing.isEmpty()) {
+                        ctx.getLog().debug("missing nodes : %s".formatted(missing));
+                        yield Behaviors.same();
+                    }
+
+                    who
+                        .collect(s.key2node()::get, Lists.mutable.empty())
+                        .forEach(node -> node.tell(new Node.Crash()));
+
+                    yield available(s);
 
                 }
 

@@ -26,6 +26,8 @@ public interface Node {
 
     record Ask4key2node(ActorRef<Joining.Res4key2node> replyTo) implements Cmd {}
 
+    record Crash() implements Cmd {}
+
     record DidJoin(ImmutableIntObjectMap<ActorRef<Msg>> key2node) implements Event {}
 
     record DidntJoin(Throwable cause) implements Event {}
@@ -106,6 +108,8 @@ public interface Node {
                     yield redundant(new State(s.k(), key2node));
                 }
 
+                case Crash ignored -> crashed(s.k());
+
                 default -> Behaviors.same();
 
             };
@@ -130,9 +134,21 @@ public interface Node {
                     yield redundant(new State(s.k(), key2node));
                 }
 
+                case Crash ignored -> crashed(s.k());
+
                 default -> Behaviors.same();
 
             };
+
+        });
+    }
+
+    private static Behavior<Msg> crashed(int k) {
+        return Behaviors.receive((ctx, msg) -> {
+
+            ctx.getLog().info("crashed\n\t%d\n\t%s".formatted(k, msg));
+
+            return Behaviors.same();
 
         });
     }

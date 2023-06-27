@@ -15,8 +15,10 @@ public interface Main {
         root.tell(new Root.Join(50, 40));
         root.tell(new Root.Join(60, 50));
         root.tell(new Root.Join(70, 60));
+        root.tell(new Root.Crash(10, 30, 50, 70));
+        root.tell(new Root.Join(80, 70));
 
-        TimeUnit.SECONDS.sleep(1L);
+        TimeUnit.SECONDS.sleep(2L);
         root.terminate();
     }
 }
