@@ -3,6 +3,9 @@ package it.unitn.root;
 import akka.actor.typed.Behavior;
 import akka.actor.typed.javadsl.Behaviors;
 
+import java.time.Duration;
+import java.util.concurrent.TimeoutException;
+
 public interface Task {
 
     sealed interface Result {}
@@ -20,6 +23,13 @@ public interface Task {
             }
 
             return Behaviors.stopped();
+        });
+    }
+
+    static Behavior<Result> listener(Duration timeout) {
+        return Behaviors.withTimers(timer -> {
+            timer.startSingleTimer(new Left(new TimeoutException()), timeout);
+            return listener();
         });
     }
 

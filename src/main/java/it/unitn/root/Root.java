@@ -10,6 +10,8 @@ import org.eclipse.collections.api.factory.primitive.IntSets;
 import org.eclipse.collections.api.map.primitive.ImmutableIntObjectMap;
 import org.eclipse.collections.api.set.primitive.ImmutableIntSet;
 
+import java.time.Duration;
+
 import static it.unitn.node.Node.newbie;
 
 public interface Root {
@@ -29,6 +31,8 @@ public interface Root {
     record Crash(int... who) implements Cmd {}
 
     record Recover(int who, int with) implements Cmd {}
+
+    record Leave(int who) implements Cmd {}
 
     record Gone(int k) implements Event {}
 
@@ -134,6 +138,24 @@ public interface Root {
                     ctx.watch(listener);
 
                     who.tell(new Node.Recover(listener, with));
+
+                    yield busy(s);
+
+                }
+
+                case Leave x -> {
+
+                    final var who = s.key2node().get(x.who());
+
+                    if (who == null) {
+                        ctx.getLog().debug("node %2d missing".formatted(x.who()));
+                        yield Behaviors.same();
+                    }
+
+                    final var listener = ctx.spawn(Task.listener(Duration.ofSeconds(2L)), "task");
+                    ctx.watch(listener);
+
+                    who.tell(new Node.Leave(listener));
 
                     yield busy(s);
 

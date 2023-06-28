@@ -4,6 +4,8 @@ import akka.actor.typed.ActorRef;
 import akka.actor.typed.Behavior;
 import akka.actor.typed.javadsl.Behaviors;
 import it.unitn.root.Task;
+import org.eclipse.collections.api.factory.Lists;
+import org.eclipse.collections.api.list.ImmutableList;
 import org.eclipse.collections.api.map.primitive.ImmutableIntObjectMap;
 
 import java.util.Objects;
@@ -30,11 +32,19 @@ public interface Node {
 
     record Recover(ActorRef<Task.Result> replyTo, ActorRef<Node.Msg> ref) implements Cmd {}
 
+    record Leave(ActorRef<Task.Result> replyTo) implements Cmd {}
+
     record DidJoin(ImmutableIntObjectMap<ActorRef<Msg>> key2node) implements Event {}
 
     record DidntJoin(Throwable cause) implements Event {}
 
     record Announce(int key, ActorRef<Msg> ref) implements Event {}
+
+    record AnnounceLeaving(ActorRef<Leaving.Ack> replyTo, int key) implements Event {}
+
+    record DidLeave() implements Event {}
+
+    record DidntLeave(Throwable cause) implements Event {}
 
     static Behavior<Msg> newbie(int k) {
         return Behaviors.receive((ctx, msg) -> {
@@ -117,6 +127,11 @@ public interface Node {
                     yield Behaviors.same();
                 }
 
+                case Leave x -> {
+                    x.replyTo().tell(new Task.Left(new AssertionError("cannot leave")));
+                    yield Behaviors.same();
+                }
+
                 default -> Behaviors.same();
 
             };
@@ -146,6 +161,14 @@ public interface Node {
                 case Recover x -> {
                     x.replyTo().tell(new Task.Left(new AssertionError("not crashed")));
                     yield Behaviors.same();
+                }
+
+                case Leave x -> leaving(x.replyTo(), s);
+
+                case AnnounceLeaving x -> {
+                    final var key2node = s.key2node().newWithoutKey(x.key());
+                    x.replyTo().tell(new Leaving.Ack());
+                    yield redundant(new State(s.k(), key2node));
                 }
 
                 default -> Behaviors.same();
@@ -195,6 +218,46 @@ public interface Node {
                         case DidntJoin x -> {
                             replyTo.tell(new Task.Left(x.cause()));
                             yield Behaviors.stopped();
+                        }
+
+                        default -> {
+                            stash.stash(msg);
+                            yield Behaviors.same();
+                        }
+
+                    };
+                });
+            })
+        );
+    }
+
+    private static Behavior<Msg> leaving(ActorRef<Task.Result> replyTo, State s) {
+        return Behaviors.withStash(
+            1_000_000,
+            stash -> Behaviors.setup(ctx -> {
+
+                final ImmutableList<ActorRef<AnnounceLeaving>> nodes =
+                    s.key2node()
+                        .newWithoutKey(s.k())
+                        .collect(ActorRef::<AnnounceLeaving>narrow, Lists.mutable.empty())
+                        .toImmutable();
+
+                ctx.spawn(Leaving.leaving(ctx.getSelf(), s.k(), nodes), "leaving");
+
+                return Behaviors.<Msg>receiveMessage(msg -> {
+
+                    ctx.getLog().info("leaving\n\t%s\n\t%s".formatted(s, msg));
+
+                    return switch (msg) {
+
+                        case DidLeave ignored -> {
+                            replyTo.tell(new Task.Right());
+                            yield Behaviors.stopped();
+                        }
+
+                        case DidntLeave x -> {
+                            replyTo.tell(new Task.Left(x.cause()));
+                            yield redundant(s);
                         }
 
                         default -> {

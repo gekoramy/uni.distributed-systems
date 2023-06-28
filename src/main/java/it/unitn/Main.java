@@ -19,8 +19,11 @@ public interface Main {
         root.tell(new Root.Recover(70, 60));
         root.tell(new Root.Join(80, 70));
         root.tell(new Root.Recover(70, 60));
+        root.tell(new Root.Leave(70));
+        root.tell(new Root.Leave(70));
+        root.tell(new Root.Leave(50));
 
-        TimeUnit.SECONDS.sleep(2L);
+        TimeUnit.SECONDS.sleep(5L);
         root.terminate();
     }
 }
