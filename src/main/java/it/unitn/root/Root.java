@@ -28,6 +28,8 @@ public interface Root {
 
     record Crash(int... who) implements Cmd {}
 
+    record Recover(int who, int with) implements Cmd {}
+
     record Gone(int k) implements Event {}
 
     static Behavior<Msg> init(ImmutableIntSet keys) {
@@ -110,6 +112,30 @@ public interface Root {
                         .forEach(node -> node.tell(new Node.Crash()));
 
                     yield available(s);
+
+                }
+
+                case Recover x -> {
+
+                    final var who = s.key2node().get(x.who());
+                    final var with = s.key2node().get(x.with());
+
+                    if (who == null) {
+                        ctx.getLog().debug("node %2d missing".formatted(x.who()));
+                        yield Behaviors.same();
+                    }
+
+                    if (with == null) {
+                        ctx.getLog().debug("node %2d missing".formatted(x.with()));
+                        yield Behaviors.same();
+                    }
+
+                    final var listener = ctx.spawn(Task.listener(), "task");
+                    ctx.watch(listener);
+
+                    who.tell(new Node.Recover(listener, with));
+
+                    yield busy(s);
 
                 }
 
