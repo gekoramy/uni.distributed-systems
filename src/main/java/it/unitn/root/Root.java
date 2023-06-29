@@ -27,6 +27,8 @@ public interface Root {
 
     sealed interface Event extends Msg {}
 
+    record Stop() implements Cmd {}
+
     record Join(int who, int with) implements Cmd {}
 
     record Crash(int... who) implements Cmd {}
@@ -64,6 +66,8 @@ public interface Root {
             ctx.getLog().info("\n\t%s\n\t%s".formatted(s, msg));
 
             return switch (msg) {
+
+                case Stop ignored -> Behaviors.stopped();
 
                 case Join x -> {
 

@@ -4,10 +4,8 @@ import akka.actor.typed.ActorSystem;
 import it.unitn.root.Root;
 import org.eclipse.collections.api.factory.primitive.IntSets;
 
-import java.util.concurrent.TimeUnit;
-
 public interface Main {
-    static void main(String[] args) throws InterruptedException {
+    static void main(String[] args) {
 
         final ActorSystem<Root.Cmd> root = ActorSystem.create(
             Root.init(IntSets.immutable.with(10, 20, 30)).narrow(),
@@ -27,8 +25,6 @@ public interface Main {
         root.tell(new Root.Leave(50));
         root.tell(new Root.Crash(10, 20, 30, 40, 50, 60, 70));
         root.tell(new Root.Leave(80));
-
-        TimeUnit.SECONDS.sleep(5L);
-        root.terminate();
+        root.tell(new Root.Stop());
     }
 }
