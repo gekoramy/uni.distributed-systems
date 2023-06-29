@@ -29,21 +29,19 @@ public interface Leaving {
                 Duration.ofSeconds(1L)
             );
 
-            return Behaviors.<Msg>receiveMessage(msg ->
-                switch (msg) {
+            return Behaviors.<Msg>receiveMessage(msg -> switch (msg) {
 
-                    case Ack ignored -> {
-                        parent.tell(new Node.DidLeave());
-                        yield Behaviors.stopped();
-                    }
-
-                    case Failed x -> {
-                        parent.tell(new Node.DidntLeave(x.cause()));
-                        yield Behaviors.stopped();
-                    }
-
+                case Ack ignored -> {
+                    parent.tell(new Node.DidLeave());
+                    yield Behaviors.stopped();
                 }
-            );
+
+                case Failed x -> {
+                    parent.tell(new Node.DidntLeave(x.cause()));
+                    yield Behaviors.stopped();
+                }
+
+            });
 
         }));
     }

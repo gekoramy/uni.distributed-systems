@@ -29,21 +29,19 @@ public interface Joining {
                 (r, t) -> r != null ? r : new Failed(t)
             );
 
-            return Behaviors.<Msg>receiveMessage(msg ->
-                switch (msg) {
+            return Behaviors.<Msg>receiveMessage(msg -> switch (msg) {
 
-                    case Res4key2node x -> {
-                        parent.tell(new Node.DidJoin(x.key2node()));
-                        yield Behaviors.stopped();
-                    }
-
-                    case Failed x -> {
-                        parent.tell(new Node.DidntJoin(x.cause()));
-                        yield Behaviors.stopped();
-                    }
-
+                case Res4key2node x -> {
+                    parent.tell(new Node.DidJoin(x.key2node()));
+                    yield Behaviors.stopped();
                 }
-            );
+
+                case Failed x -> {
+                    parent.tell(new Node.DidntJoin(x.cause()));
+                    yield Behaviors.stopped();
+                }
+
+            });
 
         });
     }
