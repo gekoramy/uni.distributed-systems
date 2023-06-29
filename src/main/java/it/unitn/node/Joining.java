@@ -11,13 +11,13 @@ public interface Joining {
 
     sealed interface Msg {}
 
-    record Res4key2node(ImmutableIntObjectMap<ActorRef<Node.Msg>> key2node) implements Msg {}
+    record Res4key2node(ImmutableIntObjectMap<ActorRef<Node.Cmd>> key2node) implements Msg {}
 
     record Failed(Throwable cause) implements Msg {}
 
     static Behavior<Msg> joining(
-        ActorRef<? super Node.Event> parent,
-        ActorRef<? super Node.Ask4key2node> ref
+        ActorRef<Node.Event> parent,
+        ActorRef<Node.Ask4key2node> ref
     ) {
         return Behaviors.setup(ctx -> {
 

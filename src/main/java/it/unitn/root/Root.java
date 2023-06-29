@@ -11,13 +11,14 @@ import org.eclipse.collections.api.map.primitive.ImmutableIntObjectMap;
 import org.eclipse.collections.api.set.primitive.ImmutableIntSet;
 
 import java.time.Duration;
+import java.util.concurrent.TimeoutException;
 
 import static it.unitn.node.Node.newbie;
 
 public interface Root {
 
     record State(
-        ImmutableIntObjectMap<ActorRef<Node.Msg>> key2node
+        ImmutableIntObjectMap<ActorRef<Node.Cmd>> key2node
     ) {}
 
     sealed interface Msg {}
@@ -34,7 +35,7 @@ public interface Root {
 
     record Leave(int who) implements Cmd {}
 
-    record Gone(int k) implements Event {}
+    record Resume(State s) implements Event {}
 
     static Behavior<Msg> init(ImmutableIntSet keys) {
 
@@ -46,14 +47,11 @@ public interface Root {
 
             final var key2node =
                 keys.injectInto(
-                    IntObjectMaps.immutable.<ActorRef<Node.Msg>>empty(),
-                    (acc, k) -> acc.newWithKeyValue(k, ctx.spawn(newbie(k), Integer.toString(k)))
+                    IntObjectMaps.immutable.<ActorRef<Node.Cmd>>empty(),
+                    (acc, k) -> acc.newWithKeyValue(k, ctx.spawn(newbie(k).narrow(), Integer.toString(k)))
                 );
 
-            key2node.forEachKeyValue((k, ref) -> {
-                ctx.watchWith(ref, new Gone(k));
-                ref.tell(new Node.Setup(key2node));
-            });
+            key2node.forEach(ref -> ref.tell(new Node.Setup(key2node)));
 
             return available(new State(key2node));
 
@@ -66,15 +64,6 @@ public interface Root {
             ctx.getLog().info("\n\t%s\n\t%s".formatted(s, msg));
 
             return switch (msg) {
-
-                case Gone x -> {
-
-                    final var key2node =
-                        s.key2node().newWithoutKey(x.k());
-
-                    yield available(new State(key2node));
-
-                }
 
                 case Join x -> {
 
@@ -90,14 +79,10 @@ public interface Root {
                         yield Behaviors.same();
                     }
 
-                    final var listener = ctx.spawn(Task.listener(), "task");
-                    ctx.watch(listener);
+                    final var task = ctx.spawnAnonymous(onDDJoin(ctx.getSelf(), s, x.who()));
+                    ctx.spawn(newbie(task, x.who(), with), Integer.toString(x.who()));
 
-                    final var who = ctx.spawn(newbie(listener, x.who(), with), Integer.toString(x.who()));
-                    ctx.watchWith(who, new Gone(x.who()));
-
-                    final var key2node = s.key2node().newWithKeyValue(x.who(), who);
-                    yield busy(new State(key2node));
+                    yield blocked();
 
                 }
 
@@ -115,7 +100,7 @@ public interface Root {
                         .collect(s.key2node()::get, Lists.mutable.empty())
                         .forEach(node -> node.tell(new Node.Crash()));
 
-                    yield available(s);
+                    yield Behaviors.same();
 
                 }
 
@@ -134,12 +119,11 @@ public interface Root {
                         yield Behaviors.same();
                     }
 
-                    final var listener = ctx.spawn(Task.listener(), "task");
-                    ctx.watch(listener);
+                    final var task = ctx.spawnAnonymous(onDDRecover(ctx.getSelf(), s));
 
-                    who.tell(new Node.Recover(listener, with));
+                    who.tell(new Node.Recover(task, with));
 
-                    yield busy(s);
+                    yield blocked();
 
                 }
 
@@ -152,12 +136,18 @@ public interface Root {
                         yield Behaviors.same();
                     }
 
-                    final var listener = ctx.spawn(Task.listener(Duration.ofSeconds(2L)), "task");
-                    ctx.watch(listener);
+                    final var task = ctx.spawnAnonymous(onDDLeave(ctx.getSelf(), s, x.who(), who));
 
-                    who.tell(new Node.Leave(listener));
+                    who.tell(new Node.Leave(task.narrow()));
 
-                    yield busy(s);
+                    yield blocked();
+
+                }
+
+                case Resume x -> {
+
+                    ctx.getLog().error("unexpected %s".formatted(x));
+                    yield Behaviors.same();
 
                 }
 
@@ -165,17 +155,87 @@ public interface Root {
         });
     }
 
-    private static Behavior<Msg> busy(State s) {
-        return Behaviors.withStash(
-            1_000_000,
-            stash -> Behaviors.receive(Msg.class)
-                .onAnyMessage(msg -> {
-                    stash.stash(msg);
-                    return Behaviors.same();
-                })
-                .onSignal(akka.actor.typed.Terminated.class, ignored -> stash.unstashAll(available(s)))
-                .build()
+    private static Behavior<Msg> blocked() {
+        return Behaviors.withStash(1_000_000, buffer -> Behaviors.receive(Msg.class)
+            .onMessage(Resume.class, msg -> buffer.unstashAll(available(msg.s())))
+            .onAnyMessage(msg -> {
+                buffer.stash(msg);
+                return Behaviors.same();
+            })
+            .build()
         );
+    }
+
+    private static Behavior<DidOrDidnt.Join> onDDJoin(
+        ActorRef<Msg> root,
+        State s,
+        int k
+    ) {
+        return Behaviors.receive((ctx, msg) -> switch (msg) {
+
+            case DidOrDidnt.Join.Did x -> {
+                ctx.getLog().info("yay");
+                root.tell(new Resume(new State(s.key2node().newWithKeyValue(k, x.who()))));
+                yield Behaviors.stopped();
+            }
+
+            case DidOrDidnt.Join.Didnt x -> {
+                ctx.getLog().info("ouch", x.cause());
+                root.tell(new Resume(s));
+                yield Behaviors.stopped();
+            }
+
+        });
+    }
+
+    private static Behavior<DidOrDidnt.Leave> onDDLeave(
+        ActorRef<Msg> root,
+        State s,
+        int k,
+        ActorRef<Node.Cmd> who
+    ) {
+        return Behaviors.withTimers(timer -> {
+            timer.startSingleTimer(new DidOrDidnt.Leave.Didnt(new TimeoutException()), Duration.ofSeconds(2L));
+            return Behaviors.setup(ctx -> {
+                ctx.watchWith(who, new DidOrDidnt.Leave.Did());
+                return Behaviors.<DidOrDidnt.Leave>receiveMessage(msg -> switch (msg) {
+
+                    case DidOrDidnt.Leave.Did ignored -> {
+                        ctx.getLog().info("yay");
+                        root.tell(new Resume(new State(s.key2node().newWithoutKey(k))));
+                        yield Behaviors.stopped();
+                    }
+
+                    case DidOrDidnt.Leave.Didnt x -> {
+                        ctx.getLog().info("ouch", x.cause());
+                        root.tell(new Resume(s));
+                        yield Behaviors.stopped();
+                    }
+
+                });
+            });
+        });
+    }
+
+    private static Behavior<DidOrDidnt.Recover> onDDRecover(
+        ActorRef<Msg> root,
+        State s
+    ) {
+        return Behaviors.receive((ctx, msg) -> switch (msg) {
+
+            case DidOrDidnt.Recover.Did ignored -> {
+                ctx.getLog().info("yay");
+                root.tell(new Resume(s));
+                yield Behaviors.stopped();
+            }
+
+            case DidOrDidnt.Recover.Didnt x -> {
+                ctx.getLog().info("ouch", x.cause());
+                root.tell(new Resume(s));
+                yield Behaviors.stopped();
+            }
+
+        });
     }
 
 }

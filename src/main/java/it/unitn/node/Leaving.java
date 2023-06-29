@@ -16,7 +16,7 @@ public interface Leaving {
     record Failed(Throwable cause) implements Msg {}
 
     static Behavior<Msg> leaving(
-        ActorRef<? super Node.Event> parent,
+        ActorRef<Node.Event> parent,
         int k,
         ImmutableList<ActorRef<Node.AnnounceLeaving>> refs
     ) {

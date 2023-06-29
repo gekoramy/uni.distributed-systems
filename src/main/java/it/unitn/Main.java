@@ -9,7 +9,10 @@ import java.util.concurrent.TimeUnit;
 public interface Main {
     static void main(String[] args) throws InterruptedException {
 
-        final var root = ActorSystem.create(Root.init(IntSets.immutable.with(10, 20, 30)), "root");
+        final ActorSystem<Root.Cmd> root = ActorSystem.create(
+            Root.init(IntSets.immutable.with(10, 20, 30)).narrow(),
+            "root"
+        );
 
         root.tell(new Root.Join(40, 30));
         root.tell(new Root.Join(50, 40));
@@ -20,8 +23,10 @@ public interface Main {
         root.tell(new Root.Join(80, 70));
         root.tell(new Root.Recover(70, 60));
         root.tell(new Root.Leave(70));
-        root.tell(new Root.Leave(70));
+        root.tell(new Root.Join(70, 80));
         root.tell(new Root.Leave(50));
+        root.tell(new Root.Crash(10, 20, 30, 40, 50, 60, 70));
+        root.tell(new Root.Leave(80));
 
         TimeUnit.SECONDS.sleep(5L);
         root.terminate();

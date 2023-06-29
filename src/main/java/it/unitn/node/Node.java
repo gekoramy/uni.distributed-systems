@@ -3,7 +3,7 @@ package it.unitn.node;
 import akka.actor.typed.ActorRef;
 import akka.actor.typed.Behavior;
 import akka.actor.typed.javadsl.Behaviors;
-import it.unitn.root.Task;
+import it.unitn.root.DidOrDidnt;
 import org.eclipse.collections.api.factory.Lists;
 import org.eclipse.collections.api.list.ImmutableList;
 import org.eclipse.collections.api.map.primitive.ImmutableIntObjectMap;
@@ -14,7 +14,7 @@ public interface Node {
 
     record State(
         int k,
-        ImmutableIntObjectMap<ActorRef<Msg>> key2node
+        ImmutableIntObjectMap<ActorRef<Cmd>> key2node
 
     ) {}
 
@@ -24,23 +24,23 @@ public interface Node {
 
     sealed interface Event extends Msg {}
 
-    record Setup(ImmutableIntObjectMap<ActorRef<Msg>> key2node) implements Cmd {}
+    record Setup(ImmutableIntObjectMap<ActorRef<Cmd>> key2node) implements Cmd {}
 
     record Ask4key2node(ActorRef<Joining.Res4key2node> replyTo) implements Cmd {}
 
     record Crash() implements Cmd {}
 
-    record Recover(ActorRef<Task.Result> replyTo, ActorRef<Node.Msg> ref) implements Cmd {}
+    record Recover(ActorRef<DidOrDidnt.Recover> replyTo, ActorRef<Node.Cmd> ref) implements Cmd {}
 
-    record Leave(ActorRef<Task.Result> replyTo) implements Cmd {}
+    record Leave(ActorRef<DidOrDidnt.Leave.Didnt> replyTo) implements Cmd {}
 
-    record DidJoin(ImmutableIntObjectMap<ActorRef<Msg>> key2node) implements Event {}
+    record DidJoin(ImmutableIntObjectMap<ActorRef<Cmd>> key2node) implements Event {}
 
     record DidntJoin(Throwable cause) implements Event {}
 
-    record Announce(int key, ActorRef<Msg> ref) implements Event {}
+    record Announce(int key, ActorRef<Cmd> ref) implements Cmd {}
 
-    record AnnounceLeaving(ActorRef<Leaving.Ack> replyTo, int key) implements Event {}
+    record AnnounceLeaving(ActorRef<Leaving.Ack> replyTo, int key) implements Cmd {}
 
     record DidLeave() implements Event {}
 
@@ -63,7 +63,7 @@ public interface Node {
         });
     }
 
-    static Behavior<Msg> newbie(ActorRef<Task.Result> replyTo, int k, ActorRef<Msg> ref) {
+    static Behavior<Msg> newbie(ActorRef<DidOrDidnt.Join> replyTo, int k, ActorRef<Cmd> ref) {
         return Behaviors.withStash(
             1_000_000,
             stash -> Behaviors.setup(ctx -> {
@@ -71,7 +71,7 @@ public interface Node {
                 if (Objects.equals(ref, ctx.getSelf()))
                     throw new AssertionError("cannot join myself...");
 
-                ctx.spawn(Joining.joining(ctx.getSelf(), ref), "joining");
+                ctx.spawn(Joining.joining(ctx.getSelf().narrow(), ref.narrow()), "joining");
 
                 return Behaviors.<Msg>receiveMessage(msg -> {
 
@@ -80,15 +80,15 @@ public interface Node {
                     return switch (msg) {
 
                         case DidJoin x -> {
-                            x.key2node().forEachValue(node -> node.tell(new Announce(k, ctx.getSelf())));
-                            replyTo.tell(new Task.Right());
+                            x.key2node().forEachValue(node -> node.tell(new Announce(k, ctx.getSelf().narrow())));
+                            replyTo.tell(new DidOrDidnt.Join.Did(ctx.getSelf().narrow()));
 
-                            final var key2node = x.key2node().newWithKeyValue(k, ctx.getSelf());
+                            final var key2node = x.key2node().newWithKeyValue(k, ctx.getSelf().narrow());
                             yield stash.unstashAll(redundant(new State(k, key2node)));
                         }
 
                         case DidntJoin x -> {
-                            replyTo.tell(new Task.Left(x.cause()));
+                            replyTo.tell(new DidOrDidnt.Join.Didnt(x.cause()));
                             yield Behaviors.stopped();
                         }
 
@@ -123,12 +123,12 @@ public interface Node {
                 case Crash ignored -> crashed(s.k());
 
                 case Recover x -> {
-                    x.replyTo().tell(new Task.Left(new AssertionError("not crashed")));
+                    x.replyTo().tell(new DidOrDidnt.Recover.Didnt(new AssertionError("not crashed")));
                     yield Behaviors.same();
                 }
 
                 case Leave x -> {
-                    x.replyTo().tell(new Task.Left(new AssertionError("cannot leave")));
+                    x.replyTo().tell(new DidOrDidnt.Leave.Didnt(new AssertionError("cannot leave")));
                     yield Behaviors.same();
                 }
 
@@ -159,7 +159,7 @@ public interface Node {
                 case Crash ignored -> crashed(s.k());
 
                 case Recover x -> {
-                    x.replyTo().tell(new Task.Left(new AssertionError("not crashed")));
+                    x.replyTo().tell(new DidOrDidnt.Recover.Didnt(new AssertionError("not crashed")));
                     yield Behaviors.same();
                 }
 
@@ -193,7 +193,7 @@ public interface Node {
         });
     }
 
-    private static Behavior<Msg> recovering(ActorRef<Task.Result> replyTo, int k, ActorRef<Msg> ref) {
+    private static Behavior<Msg> recovering(ActorRef<DidOrDidnt.Recover> replyTo, int k, ActorRef<Cmd> ref) {
         return Behaviors.withStash(
             1_000_000,
             stash -> Behaviors.setup(ctx -> {
@@ -201,7 +201,7 @@ public interface Node {
                 if (Objects.equals(ref, ctx.getSelf()))
                     throw new AssertionError("cannot recover w/ myself...");
 
-                ctx.spawn(Joining.joining(ctx.getSelf(), ref), "recovering");
+                ctx.spawn(Joining.joining(ctx.getSelf().narrow(), ref.narrow()), "recovering");
 
                 return Behaviors.<Msg>receiveMessage(msg -> {
 
@@ -210,13 +210,13 @@ public interface Node {
                     return switch (msg) {
 
                         case DidJoin x -> {
-                            replyTo.tell(new Task.Right());
-                            final var key2node = x.key2node().newWithKeyValue(k, ctx.getSelf());
+                            replyTo.tell(new DidOrDidnt.Recover.Did());
+                            final var key2node = x.key2node().newWithKeyValue(k, ctx.getSelf().narrow());
                             yield stash.unstashAll(redundant(new State(k, key2node)));
                         }
 
                         case DidntJoin x -> {
-                            replyTo.tell(new Task.Left(x.cause()));
+                            replyTo.tell(new DidOrDidnt.Recover.Didnt(x.cause()));
                             yield Behaviors.stopped();
                         }
 
@@ -231,7 +231,7 @@ public interface Node {
         );
     }
 
-    private static Behavior<Msg> leaving(ActorRef<Task.Result> replyTo, State s) {
+    private static Behavior<Msg> leaving(ActorRef<DidOrDidnt.Leave.Didnt> replyTo, State s) {
         return Behaviors.withStash(
             1_000_000,
             stash -> Behaviors.setup(ctx -> {
@@ -242,7 +242,7 @@ public interface Node {
                         .collect(ActorRef::<AnnounceLeaving>narrow, Lists.mutable.empty())
                         .toImmutable();
 
-                ctx.spawn(Leaving.leaving(ctx.getSelf(), s.k(), nodes), "leaving");
+                ctx.spawn(Leaving.leaving(ctx.getSelf().narrow(), s.k(), nodes), "leaving");
 
                 return Behaviors.<Msg>receiveMessage(msg -> {
 
@@ -250,13 +250,10 @@ public interface Node {
 
                     return switch (msg) {
 
-                        case DidLeave ignored -> {
-                            replyTo.tell(new Task.Right());
-                            yield Behaviors.stopped();
-                        }
+                        case DidLeave ignored -> Behaviors.stopped();
 
                         case DidntLeave x -> {
-                            replyTo.tell(new Task.Left(x.cause()));
+                            replyTo.tell(new DidOrDidnt.Leave.Didnt(x.cause()));
                             yield redundant(s);
                         }
 
