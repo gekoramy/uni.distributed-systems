@@ -3,6 +3,7 @@ package it.unitn.root;
 import akka.actor.typed.ActorRef;
 import akka.actor.typed.Behavior;
 import akka.actor.typed.javadsl.Behaviors;
+import it.unitn.Config;
 import it.unitn.node.Node;
 import org.eclipse.collections.api.factory.Lists;
 import org.eclipse.collections.api.factory.primitive.IntObjectMaps;
@@ -39,11 +40,22 @@ public interface Root {
 
     record Resume(State s) implements Event {}
 
-    static Behavior<Msg> init(ImmutableIntSet keys) {
+    static Behavior<Msg> init(Config config, ImmutableIntSet keys) {
 
-        if (keys.isEmpty()) {
-            throw new AssertionError("init cannot be empty");
-        }
+        if (keys.size() < config.N())
+            throw new AssertionError("|key2node| >= N");
+
+        if (config.N() < config.R())
+            throw new AssertionError("N >= R");
+
+        if (config.N() < config.W())
+            throw new AssertionError("N >= W");
+
+        if (config.N() >= config.R() + config.W())
+            throw new AssertionError("N < R + W");
+
+        if (config.T().isNegative() || config.T().isZero())
+            throw new AssertionError("T > 0");
 
         return Behaviors.setup(ctx -> {
 
@@ -53,7 +65,7 @@ public interface Root {
                     (acc, k) -> acc.newWithKeyValue(k, ctx.spawn(newbie(k).narrow(), Integer.toString(k)))
                 );
 
-            key2node.forEach(ref -> ref.tell(new Node.Setup(key2node)));
+            key2node.forEach(ref -> ref.tell(new Node.Setup(config, key2node)));
 
             return available(new State(key2node));
 

@@ -3,6 +3,7 @@ package it.unitn.node;
 import akka.actor.typed.ActorRef;
 import akka.actor.typed.Behavior;
 import akka.actor.typed.javadsl.Behaviors;
+import it.unitn.Config;
 import it.unitn.root.DidOrDidnt;
 import org.eclipse.collections.api.factory.Lists;
 import org.eclipse.collections.api.list.ImmutableList;
@@ -14,8 +15,8 @@ public interface Node {
 
     record State(
         int k,
+        Config config,
         ImmutableIntObjectMap<ActorRef<Cmd>> key2node
-
     ) {}
 
     sealed interface Msg {}
@@ -24,7 +25,7 @@ public interface Node {
 
     sealed interface Event extends Msg {}
 
-    record Setup(ImmutableIntObjectMap<ActorRef<Cmd>> key2node) implements Cmd {}
+    record Setup(Config config, ImmutableIntObjectMap<ActorRef<Cmd>> key2node) implements Cmd {}
 
     record Ask4key2node(ActorRef<Joining.Res4key2node> replyTo) implements Cmd {}
 
@@ -34,7 +35,7 @@ public interface Node {
 
     record Leave(ActorRef<DidOrDidnt.Leave.Didnt> replyTo) implements Cmd {}
 
-    record DidJoin(ImmutableIntObjectMap<ActorRef<Cmd>> key2node) implements Event {}
+    record DidJoin(Config config, ImmutableIntObjectMap<ActorRef<Cmd>> key2node) implements Event {}
 
     record DidntJoin(Throwable cause) implements Event {}
 
@@ -53,7 +54,15 @@ public interface Node {
 
             return switch (msg) {
 
-                case Setup x -> minimal(new State(k, x.key2node()));
+                case Setup x && x.key2node().size() > x.config().N() ->
+                    redundant(new State(k, x.config(), x.key2node()));
+
+                case Setup x && x.key2node().size() == x.config().N() ->
+                    minimal(new State(k, x.config(), x.key2node()));
+
+                case Setup x && x.key2node().size() < x.config().N() -> Behaviors.stopped(() -> {
+                    throw new AssertionError("|key2node| >= N");
+                });
 
                 default -> Behaviors.stopped(() -> {
                     throw new AssertionError("only %s".formatted(Setup.class.getName()));
@@ -84,7 +93,7 @@ public interface Node {
                             replyTo.tell(new DidOrDidnt.Join.Did(ctx.getSelf().narrow()));
 
                             final var key2node = x.key2node().newWithKeyValue(k, ctx.getSelf().narrow());
-                            yield stash.unstashAll(redundant(new State(k, key2node)));
+                            yield stash.unstashAll(redundant(new State(k, x.config(), key2node)));
                         }
 
                         case DidntJoin x -> {
@@ -111,13 +120,13 @@ public interface Node {
             return switch (msg) {
 
                 case Ask4key2node x -> {
-                    x.replyTo().tell(new Joining.Res4key2node(s.key2node()));
+                    x.replyTo().tell(new Joining.Res4key2node(s.config(), s.key2node()));
                     yield Behaviors.same();
                 }
 
                 case Announce x -> {
                     final var key2node = s.key2node().newWithKeyValue(x.key(), x.ref());
-                    yield redundant(new State(s.k(), key2node));
+                    yield redundant(new State(s.k(), s.config(), key2node));
                 }
 
                 case Crash ignored -> crashed(s.k());
@@ -147,13 +156,13 @@ public interface Node {
             return switch (msg) {
 
                 case Ask4key2node x -> {
-                    x.replyTo().tell(new Joining.Res4key2node(s.key2node()));
+                    x.replyTo().tell(new Joining.Res4key2node(s.config(), s.key2node()));
                     yield Behaviors.same();
                 }
 
                 case Announce x -> {
                     final var key2node = s.key2node().newWithKeyValue(x.key(), x.ref());
-                    yield redundant(new State(s.k(), key2node));
+                    yield redundant(new State(s.k(), s.config(), key2node));
                 }
 
                 case Crash ignored -> crashed(s.k());
@@ -166,9 +175,14 @@ public interface Node {
                 case Leave x -> leaving(x.replyTo(), s);
 
                 case AnnounceLeaving x -> {
-                    final var key2node = s.key2node().newWithoutKey(x.key());
                     x.replyTo().tell(new Leaving.Ack());
-                    yield redundant(new State(s.k(), key2node));
+
+                    final var key2node = s.key2node().newWithoutKey(x.key());
+                    final var newState = new State(s.k(), s.config(), key2node);
+
+                    yield key2node.size() == s.config().N()
+                        ? minimal(newState)
+                        : redundant(newState);
                 }
 
                 default -> Behaviors.same();
@@ -211,8 +225,15 @@ public interface Node {
 
                         case DidJoin x -> {
                             replyTo.tell(new DidOrDidnt.Recover.Did());
+
                             final var key2node = x.key2node().newWithKeyValue(k, ctx.getSelf().narrow());
-                            yield stash.unstashAll(redundant(new State(k, key2node)));
+                            final var newState = new State(k, x.config(), key2node);
+
+                            yield stash.unstashAll(
+                                key2node.size() == x.config().N()
+                                    ? minimal(newState)
+                                    : redundant(newState)
+                            );
                         }
 
                         case DidntJoin x -> {
@@ -254,7 +275,9 @@ public interface Node {
 
                         case DidntLeave x -> {
                             replyTo.tell(new DidOrDidnt.Leave.Didnt(x.cause()));
-                            yield redundant(s);
+                            yield s.key2node().size() == s.config().N()
+                                ? minimal(s)
+                                : redundant(s);
                         }
 
                         default -> {

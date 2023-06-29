@@ -3,6 +3,7 @@ package it.unitn.node;
 import akka.actor.typed.ActorRef;
 import akka.actor.typed.Behavior;
 import akka.actor.typed.javadsl.Behaviors;
+import it.unitn.Config;
 import org.eclipse.collections.api.map.primitive.ImmutableIntObjectMap;
 
 import java.time.Duration;
@@ -11,7 +12,7 @@ public interface Joining {
 
     sealed interface Msg {}
 
-    record Res4key2node(ImmutableIntObjectMap<ActorRef<Node.Cmd>> key2node) implements Msg {}
+    record Res4key2node(Config config, ImmutableIntObjectMap<ActorRef<Node.Cmd>> key2node) implements Msg {}
 
     record Failed(Throwable cause) implements Msg {}
 
@@ -32,7 +33,7 @@ public interface Joining {
             return Behaviors.<Msg>receiveMessage(msg -> switch (msg) {
 
                 case Res4key2node x -> {
-                    parent.tell(new Node.DidJoin(x.key2node()));
+                    parent.tell(new Node.DidJoin(x.config(), x.key2node()));
                     yield Behaviors.stopped();
                 }
 
