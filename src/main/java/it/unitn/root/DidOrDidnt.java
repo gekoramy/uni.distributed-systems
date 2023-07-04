@@ -3,6 +3,8 @@ package it.unitn.root;
 import akka.actor.typed.ActorRef;
 import it.unitn.node.Node;
 
+import java.math.BigInteger;
+
 public interface DidOrDidnt {
 
     sealed interface Join {
@@ -26,6 +28,22 @@ public interface DidOrDidnt {
         record Did() implements Recover {}
 
         record Didnt(Throwable cause) implements Recover {}
+
+    }
+
+    sealed interface Get {
+
+        record Did(Node.Word word) implements Get {}
+
+        record Didnt(Throwable cause) implements Get {}
+
+    }
+
+    sealed interface Put {
+
+        record Did(BigInteger version) implements Put {}
+
+        record Didnt(Throwable cause) implements Put {}
 
     }
 

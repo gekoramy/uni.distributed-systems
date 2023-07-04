@@ -2,13 +2,18 @@ package it.unitn.root;
 
 import akka.actor.typed.ActorRef;
 import akka.actor.typed.Behavior;
+import akka.actor.typed.Terminated;
 import akka.actor.typed.javadsl.Behaviors;
 import it.unitn.Config;
+import it.unitn.client.Client;
 import it.unitn.node.Node;
 import org.eclipse.collections.api.factory.Lists;
+import org.eclipse.collections.api.factory.Sets;
 import org.eclipse.collections.api.factory.primitive.IntObjectMaps;
 import org.eclipse.collections.api.factory.primitive.IntSets;
+import org.eclipse.collections.api.list.ImmutableList;
 import org.eclipse.collections.api.map.primitive.ImmutableIntObjectMap;
+import org.eclipse.collections.api.set.ImmutableSet;
 import org.eclipse.collections.api.set.primitive.ImmutableIntSet;
 
 import java.time.Duration;
@@ -38,6 +43,8 @@ public interface Root {
 
     record Leave(int who) implements Cmd {}
 
+    record Clients(ImmutableList<ImmutableList<GetOrPut>> clients) implements Cmd {}
+
     record Resume(State s) implements Event {}
 
     static Behavior<Msg> init(Config config, ImmutableIntSet keys) {
@@ -51,11 +58,17 @@ public interface Root {
         if (config.N() < config.W())
             throw new AssertionError("N >= W");
 
+        if (config.N() / 2 >= config.W())
+            throw new AssertionError("N/2 < W");
+
         if (config.N() >= config.R() + config.W())
             throw new AssertionError("N < R + W");
 
         if (config.T().isNegative() || config.T().isZero())
             throw new AssertionError("T > 0");
+
+        if (keys.anySatisfy(k -> k <= 0))
+            throw new AssertionError("keys > 0");
 
         return Behaviors.setup(ctx -> {
 
@@ -82,6 +95,9 @@ public interface Root {
                 case Stop ignored -> Behaviors.stopped();
 
                 case Join x -> {
+
+                    if (x.who() <= 0)
+                        throw new AssertionError("who > 0");
 
                     if (s.key2node().containsKey(x.who())) {
                         ctx.getLog().debug("node %2d already present".formatted(x.who()));
@@ -155,6 +171,28 @@ public interface Root {
                     final var task = ctx.spawnAnonymous(onDDLeave(ctx.getSelf(), s, x.who(), who));
 
                     who.tell(new Node.Leave(task.narrow()));
+
+                    yield blocked();
+
+                }
+
+                case Clients x -> {
+
+                    final var missing = x.clients()
+                        .flatCollectInt(gps -> gps.collectInt(GetOrPut::who), IntSets.mutable.empty())
+                        .difference(s.key2node().keySet());
+
+                    if (!missing.isEmpty()) {
+                        ctx.getLog().debug("missing nodes : %s".formatted(missing));
+                        yield Behaviors.same();
+                    }
+
+                    final var clients = x.clients()
+                        .collect(gps -> gps.collect(gp -> convert(s, gp)))
+                        .collect(queue -> ctx.spawnAnonymous(Client.sequentially(queue)), Sets.mutable.empty())
+                        .toImmutable();
+
+                    ctx.spawnAnonymous(tillTerminated(ctx.getSelf(), s, clients));
 
                     yield blocked();
 
@@ -252,6 +290,36 @@ public interface Root {
             }
 
         });
+    }
+
+    private static Behavior<Void> tillTerminated(
+        ActorRef<Msg> root,
+        State s,
+        ImmutableSet<ActorRef<Void>> refs
+    ) {
+        return Behaviors.setup(ctx -> {
+            refs.forEach(ctx::watch);
+            return monotonically(root, s, refs);
+        });
+    }
+
+    private static Behavior<Void> monotonically(
+        ActorRef<Msg> root,
+        State s,
+        ImmutableSet<ActorRef<Void>> refs
+    ) {
+        return refs.isEmpty()
+            ? Behaviors.stopped(() -> root.tell(new Resume(s)))
+            : Behaviors.receive(Void.class)
+            .onSignal(Terminated.class, t -> monotonically(root, s, refs.newWithout(t.getRef())))
+            .build();
+    }
+
+    private static Client.GetOrPut convert(State s, GetOrPut gp) {
+        return switch (gp) {
+            case GetOrPut.Get get -> new Client.Get(s.key2node().get(get.who()).narrow(), get.k());
+            case GetOrPut.Put put -> new Client.Put(s.key2node().get(put.who()).narrow(), put.k(), put.value());
+        };
     }
 
 }

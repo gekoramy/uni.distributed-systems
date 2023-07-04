@@ -4,7 +4,7 @@ import akka.actor.typed.ActorRef;
 import akka.actor.typed.Behavior;
 import akka.actor.typed.javadsl.Behaviors;
 import it.unitn.Config;
-import org.eclipse.collections.api.map.primitive.ImmutableIntObjectMap;
+import org.eclipse.collections.api.map.sorted.ImmutableSortedMap;
 
 import java.time.Duration;
 
@@ -12,7 +12,7 @@ public interface Joining {
 
     sealed interface Msg {}
 
-    record Res4key2node(Config config, ImmutableIntObjectMap<ActorRef<Node.Cmd>> key2node) implements Msg {}
+    record Res4key2node(Config config, ImmutableSortedMap<Integer, ActorRef<Node.Cmd>> key2node) implements Msg {}
 
     record Failed(Throwable cause) implements Msg {}
 
