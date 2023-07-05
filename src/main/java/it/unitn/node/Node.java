@@ -336,7 +336,7 @@ public interface Node {
                             s.config(),
                             s.key2node(),
                             s.key2word().newWithKeyValue(x.k(), x.word()),
-                            s.key2locks(),
+                            s.key2locks().newWithKeyValue(x.k(), Tuples.pair(node2ref, Lists.immutable.empty())),
                             s.key2writing()
                         )
                     );
