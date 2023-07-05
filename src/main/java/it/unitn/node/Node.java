@@ -2,6 +2,7 @@ package it.unitn.node;
 
 import akka.actor.typed.ActorRef;
 import akka.actor.typed.Behavior;
+import akka.actor.typed.javadsl.ActorContext;
 import akka.actor.typed.javadsl.Behaviors;
 import it.unitn.Config;
 import it.unitn.root.DidOrDidnt;
@@ -19,6 +20,7 @@ import org.eclipse.collections.impl.tuple.Tuples;
 import java.math.BigInteger;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Function;
 
 import static it.unitn.utils.Comparing.cmp;
 import static org.eclipse.collections.impl.collector.Collectors2.toImmutableSortedMap;
@@ -44,13 +46,15 @@ public interface Node {
 
     sealed interface Event extends Msg {}
 
+    sealed interface Common {}
+
     record Setup(Config config, ImmutableIntObjectMap<ActorRef<Cmd>> key2node) implements Cmd {}
 
-    record Ask4key2node(ActorRef<Joining.Res4key2node> replyTo) implements Cmd {}
+    record Ask4key2node(ActorRef<Joining.Res4key2node> replyTo) implements Cmd, Common {}
 
-    record Crash() implements Cmd {}
+    record Crash() implements Cmd, Common {}
 
-    record Recover(ActorRef<DidOrDidnt.Recover> replyTo, ActorRef<Node.Cmd> ref) implements Cmd {}
+    record Recover(ActorRef<DidOrDidnt.Recover> replyTo, ActorRef<Node.Cmd> ref) implements Cmd, Common {}
 
     record Leave(ActorRef<DidOrDidnt.Leave.Didnt> replyTo) implements Cmd {}
 
@@ -58,7 +62,7 @@ public interface Node {
 
     record DidntJoin(Throwable cause) implements Event {}
 
-    record Announce(int node, ActorRef<Cmd> ref) implements Cmd {}
+    record Announce(int node, ActorRef<Cmd> ref) implements Cmd, Common {}
 
     record AnnounceLeaving(ActorRef<Leaving.Ack> replyTo, int node) implements Cmd {}
 
@@ -66,19 +70,19 @@ public interface Node {
 
     record DidntLeave(Throwable cause) implements Event {}
 
-    record Get(ActorRef<DidOrDidnt.Get> replyTo, int k) implements Cmd {}
+    record Get(ActorRef<DidOrDidnt.Get> replyTo, int k) implements Cmd, Common {}
 
-    record Put(ActorRef<DidOrDidnt.Put> replyTo, int k, Optional<String> value) implements Cmd {}
+    record Put(ActorRef<DidOrDidnt.Put> replyTo, int k, Optional<String> value) implements Cmd, Common {}
 
-    record Lock(ActorRef<Writing.Cmd> replyTo, int k, int node) implements Cmd {}
+    record Lock(ActorRef<Writing.Cmd> replyTo, int k, int node) implements Cmd, Common {}
 
-    record Unlock(int k, int node) implements Cmd {}
+    record Unlock(int k, int node) implements Cmd, Common {}
 
-    record Write(int node, int k, Word word) implements Cmd {}
+    record Write(int node, int k, Word word) implements Cmd, Common {}
 
-    record DidWrite(int k, ActorRef<Void> who) implements Event {}
+    record DidWrite(int k, ActorRef<Void> who) implements Event, Common {}
 
-    record Read(ActorRef<Reading.DidRead> replyTo, int k) implements Cmd {}
+    record Read(ActorRef<Reading.DidRead> replyTo, int k) implements Cmd, Common {}
 
     static Behavior<Msg> newbie(int node) {
         return Behaviors.receive((ctx, msg) -> {
@@ -160,209 +164,12 @@ public interface Node {
 
             return switch (msg) {
 
-                case Ask4key2node x -> {
-                    x.replyTo().tell(new Joining.Res4key2node(s.config(), s.key2node()));
-                    yield Behaviors.same();
-                }
-
-                case Announce x -> {
-                    final var key2node = s.key2node().newWithKeyValue(x.node(), x.ref());
-                    yield redundant(new State(s.node(), s.config(), key2node, SortedMaps.immutable.empty(), IntObjectMaps.immutable.empty(), IntObjectMaps.immutable.empty())); // TODO
-                }
-
-                case Crash ignored -> crashed(s.node());
-
-                case Recover x -> {
-                    x.replyTo().tell(new DidOrDidnt.Recover.Didnt(new AssertionError("not crashed")));
-                    yield Behaviors.same();
-                }
-
                 case Leave x -> {
                     x.replyTo().tell(new DidOrDidnt.Leave.Didnt(new AssertionError("cannot leave")));
                     yield Behaviors.same();
                 }
 
-                case Lock x -> {
-
-                    final var lock = s.key2locks().getIfAbsent(
-                        x.k(),
-                        () -> Tuples.pair(SortedMaps.immutable.empty(), Lists.immutable.empty())
-                    );
-
-                    final var node2ref = lock.getOne();
-                    final var queue = lock.getTwo();
-
-                    final int maximum = node2ref.keysView().maxOptional().orElse(0);
-
-                    switch (cmp(x.node(), maximum)) {
-                        case EQ -> throw new AssertionError("impossible");
-                        case LT -> {
-                            // do nothing
-                            // ie, put it on hold
-                        }
-                        case GT -> {
-                            // grant lock
-                            x.replyTo().tell(new Writing.Ack(
-                                ctx.getSelf().narrow(),
-                                s.key2word().getOrDefault(x.k(), DEFAULT).version()
-                            ));
-                        }
-                    }
-
-                    yield minimal(
-                        new State(
-                            s.node(),
-                            s.config(),
-                            s.key2node(),
-                            s.key2word(),
-                            s.key2locks()
-                                .newWithKeyValue(
-                                    x.k(),
-                                    Tuples.pair(
-                                        node2ref.newWithKeyValue(x.node(), x.replyTo()),
-                                        queue
-                                    )
-                                ),
-                            s.key2writing()
-                        )
-                    );
-                }
-
-                case Unlock x -> {
-
-                    // unlock never-locked resource ?
-                    // it cannot happen
-
-                    final var lock = s.key2locks().get(x.k());
-                    final var node2ref = lock.getOne().newWithoutKey(x.node());
-                    final var queue = lock.getTwo();
-
-                    if (node2ref.isEmpty()) {
-                        final var word = s.key2word().getOrDefault(x.k(), DEFAULT);
-                        queue.forEach(ref -> ref.tell(new Reading.DidRead(word)));
-                    }
-
-                    final var key2locks = node2ref.isEmpty()
-                        ? s.key2locks().newWithoutKey(x.k())
-                        : s.key2locks().newWithKeyValue(x.k(), Tuples.pair(node2ref, queue));
-
-                    yield minimal(
-                        new State(
-                            s.node(),
-                            s.config(),
-                            s.key2node(),
-                            s.key2word(),
-                            key2locks,
-                            s.key2writing()
-                        )
-                    );
-                }
-
-                case Write x -> switch (cmp(x.word().version(), s.key2word().getOrDefault(x.k(), DEFAULT).version())) {
-
-                    case EQ -> throw new AssertionError("impossible");
-
-                    case LT -> minimal(s);
-
-                    case GT -> {
-
-                        final var lock = s.key2locks().get(x.k());
-                        final var node2ref = lock.getOne();
-                        final var queue = lock.getTwo();
-
-                        final var original = x.word().version().subtract(BigInteger.valueOf(x.node()));
-
-                        // treat smaller ones as if they happened before
-                        node2ref.keyValuesView()
-                            .select(p -> p.getOne() < x.node())
-                            .forEach(p -> p.getTwo().tell(new Writing.Skip(original.add(BigInteger.valueOf(p.getOne())))));
-
-                        // it is safe to reply to RD
-                        queue.forEach(ref -> ref.tell(new Reading.DidRead(x.word())));
-
-                        yield minimal(
-                            new State(
-                                s.node(),
-                                s.config(),
-                                s.key2node(),
-                                s.key2word().newWithKeyValue(x.k(), x.word()),
-                                s.key2locks(),
-                                s.key2writing()
-                            )
-                        );
-                    }
-
-                };
-
-                case Put x -> {
-
-                    final var toWait = s.key2writing().getIfAbsent(x.k(), Lists.immutable::empty);
-
-                    final ActorRef<Void> task = ctx.spawnAnonymous(
-                        Writing.writing(x.replyTo(), s.config(), s.node(), x.k(), x.value(), s.key2node(), toWait)
-                    ).unsafeUpcast();
-
-                    ctx.watchWith(task, new DidWrite(x.k(), task));
-
-                    yield minimal(
-                        new State(
-                            s.node(),
-                            s.config(),
-                            s.key2node(),
-                            s.key2word(),
-                            s.key2locks(),
-                            s.key2writing().newWithKeyValue(x.k(), toWait.newWith(task))
-                        )
-                    );
-                }
-
-                case DidWrite x -> {
-
-                    final var toWait = s.key2writing().get(x.k()).newWithout(x.who());
-
-                    yield minimal(
-                        new State(
-                            s.node(),
-                            s.config(),
-                            s.key2node(),
-                            s.key2word(),
-                            s.key2locks(),
-                            toWait.isEmpty()
-                                ? s.key2writing().newWithoutKey(x.k())
-                                : s.key2writing().newWithKeyValue(x.k(), toWait)
-                        )
-                    );
-                }
-
-                case Get x -> {
-                    ctx.spawnAnonymous(Reading.reading(x.replyTo(), s.config(), x.k(), s.key2node()));
-                    yield minimal(s);
-                }
-
-                case Read x -> {
-
-                    final var lock = s.key2locks().get(x.k());
-
-                    if (lock == null) {
-                        final var word = s.key2word().getIfAbsentValue(x.k(), DEFAULT);
-                        x.replyTo().tell(new Reading.DidRead(word));
-                        yield Behaviors.same();
-                    }
-
-                    final var node2ref = lock.getOne();
-                    final var queue = lock.getTwo().newWith(x.replyTo());
-
-                    yield minimal(
-                        new State(
-                            s.node(),
-                            s.config(),
-                            s.key2node(),
-                            s.key2word(),
-                            s.key2locks().newWithKeyValue(x.k(), Tuples.pair(node2ref, queue)),
-                            s.key2writing()
-                        )
-                    );
-                }
+                case Common x -> common(s, ctx, x, Node::minimal);
 
                 default -> Behaviors.same();
 
@@ -378,23 +185,6 @@ public interface Node {
 
             return switch (msg) {
 
-                case Ask4key2node x -> {
-                    x.replyTo().tell(new Joining.Res4key2node(s.config(), s.key2node()));
-                    yield Behaviors.same();
-                }
-
-                case Announce x -> {
-                    final var key2node = s.key2node().newWithKeyValue(x.node(), x.ref());
-                    yield redundant(new State(s.node(), s.config(), key2node, SortedMaps.immutable.empty(), IntObjectMaps.immutable.empty(), IntObjectMaps.immutable.empty())); // TODO
-                }
-
-                case Crash ignored -> crashed(s.node());
-
-                case Recover x -> {
-                    x.replyTo().tell(new DidOrDidnt.Recover.Didnt(new AssertionError("not crashed")));
-                    yield Behaviors.same();
-                }
-
                 case Leave x -> leaving(x.replyTo(), s);
 
                 case AnnounceLeaving x -> {
@@ -408,11 +198,223 @@ public interface Node {
                         : redundant(newState);
                 }
 
+                case Common x -> common(s, ctx, x, Node::redundant);
+
                 default -> Behaviors.same();
 
             };
 
         });
+    }
+
+    private static Behavior<Msg> common(
+        State s,
+        ActorContext<Msg> ctx,
+        Common msg,
+        Function<State, Behavior<Msg>> same
+    ) {
+        return switch (msg) {
+
+            case Ask4key2node x -> {
+                x.replyTo().tell(new Joining.Res4key2node(s.config(), s.key2node()));
+                yield Behaviors.same();
+            }
+
+            case Announce x -> {
+                final var key2node = s.key2node().newWithKeyValue(x.node(), x.ref());
+                yield redundant(new State(s.node(), s.config(), key2node, SortedMaps.immutable.empty(), IntObjectMaps.immutable.empty(), IntObjectMaps.immutable.empty())); // TODO
+            }
+
+            case Crash ignored -> crashed(s.node());
+
+            case Recover x -> {
+                x.replyTo().tell(new DidOrDidnt.Recover.Didnt(new AssertionError("not crashed")));
+                yield Behaviors.same();
+            }
+
+            case Lock x -> {
+
+                final var lock = s.key2locks().getIfAbsent(
+                    x.k(),
+                    () -> Tuples.pair(SortedMaps.immutable.empty(), Lists.immutable.empty())
+                );
+
+                final var node2ref = lock.getOne();
+                final var queue = lock.getTwo();
+
+                final int maximum = node2ref.keysView().maxOptional().orElse(0);
+
+                switch (cmp(x.node(), maximum)) {
+                    case EQ -> throw new AssertionError("impossible");
+                    case LT -> {
+                        // put it on hold
+                        // ie, do nothing
+                    }
+                    case GT -> {
+                        // grant lock
+                        x.replyTo().tell(new Writing.Ack(
+                            ctx.getSelf().narrow(),
+                            s.key2word().getOrDefault(x.k(), DEFAULT).version()
+                        ));
+                    }
+                }
+
+                yield same.apply(
+                    new State(
+                        s.node(),
+                        s.config(),
+                        s.key2node(),
+                        s.key2word(),
+                        s.key2locks()
+                            .newWithKeyValue(
+                                x.k(),
+                                Tuples.pair(
+                                    node2ref.newWithKeyValue(x.node(), x.replyTo()),
+                                    queue
+                                )
+                            ),
+                        s.key2writing()
+                    )
+                );
+            }
+
+            case Unlock x -> {
+
+                // unlock never-locked resource ?
+                // it cannot happen
+
+                final var lock = s.key2locks().get(x.k());
+                final var node2ref = lock.getOne().newWithoutKey(x.node());
+                final var queue = lock.getTwo();
+
+                if (node2ref.isEmpty()) {
+                    final var word = s.key2word().getOrDefault(x.k(), DEFAULT);
+                    queue.forEach(ref -> ref.tell(new Reading.DidRead(word)));
+                }
+
+                final var key2locks = node2ref.isEmpty()
+                    ? s.key2locks().newWithoutKey(x.k())
+                    : s.key2locks().newWithKeyValue(x.k(), Tuples.pair(node2ref, queue));
+
+                yield same.apply(
+                    new State(
+                        s.node(),
+                        s.config(),
+                        s.key2node(),
+                        s.key2word(),
+                        key2locks,
+                        s.key2writing()
+                    )
+                );
+            }
+
+            case Write x -> switch (cmp(x.word().version(), s.key2word().getOrDefault(x.k(), DEFAULT).version())) {
+
+                case EQ -> throw new AssertionError("impossible");
+
+                case LT -> Behaviors.same();
+
+                case GT -> {
+
+                    final var lock = s.key2locks().get(x.k());
+                    final var node2ref = lock.getOne();
+                    final var queue = lock.getTwo();
+
+                    final var original = x.word().version().subtract(BigInteger.valueOf(x.node()));
+
+                    // treat smaller ones as if they happened before
+                    node2ref.keyValuesView()
+                        .select(p -> p.getOne() < x.node())
+                        .forEach(p -> p.getTwo().tell(new Writing.Skip(original.add(BigInteger.valueOf(p.getOne())))));
+
+                    // it is safe to reply to RD
+                    queue.forEach(ref -> ref.tell(new Reading.DidRead(x.word())));
+
+                    yield same.apply(
+                        new State(
+                            s.node(),
+                            s.config(),
+                            s.key2node(),
+                            s.key2word().newWithKeyValue(x.k(), x.word()),
+                            s.key2locks(),
+                            s.key2writing()
+                        )
+                    );
+                }
+
+            };
+
+            case Put x -> {
+
+                final var toWait = s.key2writing().getIfAbsent(x.k(), Lists.immutable::empty);
+
+                final ActorRef<Void> task = ctx.spawnAnonymous(
+                    Writing.writing(x.replyTo(), s.config(), s.node(), x.k(), x.value(), s.key2node(), toWait)
+                ).unsafeUpcast();
+
+                ctx.watchWith(task, new DidWrite(x.k(), task));
+
+                yield same.apply(
+                    new State(
+                        s.node(),
+                        s.config(),
+                        s.key2node(),
+                        s.key2word(),
+                        s.key2locks(),
+                        s.key2writing().newWithKeyValue(x.k(), toWait.newWith(task))
+                    )
+                );
+            }
+
+            case DidWrite x -> {
+
+                final var toWait = s.key2writing().get(x.k()).newWithout(x.who());
+
+                yield same.apply(
+                    new State(
+                        s.node(),
+                        s.config(),
+                        s.key2node(),
+                        s.key2word(),
+                        s.key2locks(),
+                        toWait.isEmpty()
+                            ? s.key2writing().newWithoutKey(x.k())
+                            : s.key2writing().newWithKeyValue(x.k(), toWait)
+                    )
+                );
+            }
+
+            case Get x -> {
+                ctx.spawnAnonymous(Reading.reading(x.replyTo(), s.config(), x.k(), s.key2node()));
+                yield Behaviors.same();
+            }
+
+            case Read x -> {
+
+                final var lock = s.key2locks().get(x.k());
+
+                if (lock == null) {
+                    final var word = s.key2word().getOrDefault(x.k(), DEFAULT);
+                    x.replyTo().tell(new Reading.DidRead(word));
+                    yield Behaviors.same();
+                }
+
+                final var node2ref = lock.getOne();
+                final var queue = lock.getTwo().newWith(x.replyTo());
+
+                yield same.apply(
+                    new State(
+                        s.node(),
+                        s.config(),
+                        s.key2node(),
+                        s.key2word(),
+                        s.key2locks().newWithKeyValue(x.k(), Tuples.pair(node2ref, queue)),
+                        s.key2writing()
+                    )
+                );
+            }
+
+        };
     }
 
     private static Behavior<Msg> crashed(int k) {
