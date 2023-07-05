@@ -292,17 +292,15 @@ public interface Node {
                     queue.forEach(ref -> ref.tell(new Reading.DidRead(word)));
                 }
 
-                final var key2locks = node2ref.isEmpty()
-                    ? s.key2locks().newWithoutKey(x.k())
-                    : s.key2locks().newWithKeyValue(x.k(), Tuples.pair(node2ref, queue));
-
                 yield same.apply(
                     new State(
                         s.node(),
                         s.config(),
                         s.key2node(),
                         s.key2word(),
-                        key2locks,
+                        node2ref.isEmpty()
+                            ? s.key2locks().newWithoutKey(x.k())
+                            : s.key2locks().newWithKeyValue(x.k(), Tuples.pair(node2ref, queue)),
                         s.key2writing()
                     )
                 );
