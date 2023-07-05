@@ -1,7 +1,8 @@
 package it.unitn;
 
 import akka.actor.typed.ActorSystem;
-import it.unitn.root.GetOrPut;
+import it.unitn.root.GetOrPut.Get;
+import it.unitn.root.GetOrPut.Put;
 import it.unitn.root.Root;
 import org.eclipse.collections.api.factory.Lists;
 import org.eclipse.collections.api.factory.primitive.IntSets;
@@ -46,28 +47,28 @@ public interface Main {
         root.tell(new Root.Join(60, 10));
         root.tell(new Root.Join(70, 10));
         root.tell(new Root.Clients(Lists.immutable.with(
-            Lists.immutable.with(new GetOrPut.Put(10, 1, "a"), new GetOrPut.Get(10, 1)),
-            Lists.immutable.with(new GetOrPut.Put(10, 1, "b"), new GetOrPut.Put(10, 1, "j")),
-            Lists.immutable.with(new GetOrPut.Put(30, 1, "c"), new GetOrPut.Get(10, 1)),
-            Lists.immutable.with(new GetOrPut.Put(10, 1, "d"), new GetOrPut.Get(10, 1)),
-            Lists.immutable.with(new GetOrPut.Put(10, 1, "e"), new GetOrPut.Put(10, 1, "k")),
-            Lists.immutable.with(new GetOrPut.Put(20, 1, "f"), new GetOrPut.Get(10, 1)),
-            Lists.immutable.with(new GetOrPut.Put(10, 1, "g"), new GetOrPut.Get(10, 1)),
-            Lists.immutable.with(new GetOrPut.Put(10, 1, "h"), new GetOrPut.Put(10, 1, "l")),
-            Lists.immutable.with(new GetOrPut.Put(10, 1, "i"), new GetOrPut.Get(10, 1))
+            Lists.immutable.with(new Put(10, 1, "a"), new Get(10, 1)),
+            Lists.immutable.with(new Put(10, 1, "b"), new Put(10, 1, "j")),
+            Lists.immutable.with(new Put(30, 1, "c"), new Get(10, 1)),
+            Lists.immutable.with(new Put(10, 1, "d"), new Get(10, 1)),
+            Lists.immutable.with(new Put(10, 1, "e"), new Put(10, 1, "k")),
+            Lists.immutable.with(new Put(20, 1, "f"), new Get(10, 1)),
+            Lists.immutable.with(new Put(10, 1, "g"), new Get(10, 1)),
+            Lists.immutable.with(new Put(10, 1, "h"), new Put(10, 1, "l")),
+            Lists.immutable.with(new Put(10, 1, "i"), new Get(10, 1))
         )));
         root.tell(new Root.Clients(Lists.immutable.with(
-            Lists.immutable.with(new GetOrPut.Put(10, 50, "a"), new GetOrPut.Put(10, 50, "e"), new GetOrPut.Get(10, 50)),
-            Lists.immutable.with(new GetOrPut.Put(20, 50, "b"), new GetOrPut.Put(10, 50)),
-            Lists.immutable.with(new GetOrPut.Put(30, 50, "c"), new GetOrPut.Get(10, 50)),
-            Lists.immutable.with(new GetOrPut.Put(80, 50, "d"), new GetOrPut.Put(10, 50, "f"))
+            Lists.immutable.with(new Put(10, 50, "a"), new Put(10, 50, "e"), new Get(10, 50)),
+            Lists.immutable.with(new Put(20, 50, "b"), new Put(10, 50)),
+            Lists.immutable.with(new Put(30, 50, "c"), new Get(10, 50)),
+            Lists.immutable.with(new Put(80, 50, "d"), new Put(10, 50, "f"))
         )));
         root.tell(new Root.Crash(50, 70));
         root.tell(new Root.Clients(Lists.immutable.with(
-            Lists.immutable.with(new GetOrPut.Put(10, 50, "g"), new GetOrPut.Put(10, 50, "k"), new GetOrPut.Get(10, 50)),
-            Lists.immutable.with(new GetOrPut.Put(20, 50, "h"), new GetOrPut.Put(10, 50)),
-            Lists.immutable.with(new GetOrPut.Put(30, 50, "i"), new GetOrPut.Get(10, 50)),
-            Lists.immutable.with(new GetOrPut.Put(80, 50, "j"), new GetOrPut.Put(10, 50, "l"))
+            Lists.immutable.with(new Put(10, 50, "g"), new Put(10, 50, "k"), new Get(10, 50)),
+            Lists.immutable.with(new Put(20, 50, "h"), new Put(10, 50)),
+            Lists.immutable.with(new Put(30, 50, "i"), new Get(10, 50)),
+            Lists.immutable.with(new Put(80, 50, "j"), new Put(10, 50, "l"))
         )));
         root.tell(new Root.Stop());
     }
