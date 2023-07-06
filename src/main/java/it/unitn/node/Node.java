@@ -64,7 +64,9 @@ public interface Node {
 
     record Announce(int node, ActorRef<Cmd> ref) implements Cmd, Common {}
 
-    record AnnounceLeaving(ActorRef<Leaving.Ack> replyTo, int node) implements Cmd {}
+    record Ping(ActorRef<Leaving.Ack> replyTo) implements Cmd {}
+
+    record AnnounceLeaving(int node, ImmutableSortedMap<Integer, Word> key2word) implements Cmd {}
 
     record DidLeave() implements Event {}
 
@@ -187,11 +189,28 @@ public interface Node {
 
                 case Leave x -> leaving(x.replyTo(), s);
 
-                case AnnounceLeaving x -> {
-                    x.replyTo().tell(new Leaving.Ack());
+                case Ping x -> {
+                    x.replyTo().tell(new Leaving.Ack(ctx.getSelf().narrow()));
+                    yield Behaviors.same();
+                }
 
+                case AnnounceLeaving x -> {
                     final var key2node = s.key2node().newWithoutKey(x.node());
-                    final var newState = new State(s.node(), s.config(), key2node, SortedMaps.immutable.empty(), IntObjectMaps.immutable.empty(), IntObjectMaps.immutable.empty()); // TODO
+                    final var key2word = x.key2word().keyValuesView()
+                        .reduceInPlace(
+                            s.key2word()::toSortedMap,
+                            (acc, p) -> acc.merge(p.getOne(), p.getTwo(), (a, b) -> Lists.immutable.of(a, b).maxBy(Word::version))
+                        )
+                        .toImmutable();
+
+                    final var newState = new State(
+                        s.node(),
+                        s.config(),
+                        key2node,
+                        key2word,
+                        IntObjectMaps.immutable.empty(),
+                        IntObjectMaps.immutable.empty()
+                    );
 
                     yield key2node.size() == s.config().N()
                         ? minimal(newState)
@@ -480,13 +499,7 @@ public interface Node {
             1_000_000,
             stash -> Behaviors.setup(ctx -> {
 
-                final ImmutableList<ActorRef<AnnounceLeaving>> nodes =
-                    s.key2node()
-                        .newWithoutKey(s.node())
-                        .collect(ActorRef::<AnnounceLeaving>narrow, Lists.mutable.empty())
-                        .toImmutable();
-
-                ctx.spawn(Leaving.leaving(ctx.getSelf().narrow(), s.node(), nodes), "leaving");
+                ctx.spawn(Leaving.leaving(ctx.getSelf().narrow(), s.config(), s.node(), s.key2node(), s.key2word()), "leaving");
 
                 return Behaviors.<Msg>receiveMessage(msg -> {
 
@@ -498,9 +511,11 @@ public interface Node {
 
                         case DidntLeave x -> {
                             replyTo.tell(new DidOrDidnt.Leave.Didnt(x.cause()));
-                            yield s.key2node().size() == s.config().N()
-                                ? minimal(s)
-                                : redundant(s);
+                            yield stash.unstashAll(
+                                s.key2node().size() == s.config().N()
+                                    ? minimal(s)
+                                    : redundant(s)
+                            );
                         }
 
                         default -> {

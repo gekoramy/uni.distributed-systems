@@ -70,6 +70,10 @@ public interface Main {
             Lists.immutable.with(new Put(30, 50, "i"), new Get(10, 50)),
             Lists.immutable.with(new Put(80, 50, "j"), new Put(10, 50, "l"))
         )));
+        root.tell(new Root.Crash(10, 50, 60, 70));
+        root.tell(new Root.Leave(80));
+        root.tell(new Root.Recover(10, 20));
+        root.tell(new Root.Leave(80));
         root.tell(new Root.Stop());
     }
 }
