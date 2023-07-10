@@ -37,7 +37,13 @@ public interface Root {
 
     record Join(int who, int with) implements Cmd {}
 
-    record Crash(int... who) implements Cmd {}
+    record Crash(ImmutableIntSet who) implements Cmd {
+
+        public Crash(int... who) {
+            this(IntSets.immutable.with(who));
+        }
+
+    }
 
     record Recover(int who, int with) implements Cmd {}
 
@@ -120,15 +126,14 @@ public interface Root {
 
                 case Crash x -> {
 
-                    final var who = IntSets.immutable.with(x.who());
-                    final var missing = who.difference(s.key2node().keySet());
+                    final var missing = x.who().difference(s.key2node().keySet());
 
                     if (!missing.isEmpty()) {
                         ctx.getLog().debug("missing nodes : %s".formatted(missing));
                         yield Behaviors.same();
                     }
 
-                    who
+                    x.who()
                         .collect(s.key2node()::get, Lists.mutable.empty())
                         .forEach(node -> node.tell(new Node.Crash()));
 
