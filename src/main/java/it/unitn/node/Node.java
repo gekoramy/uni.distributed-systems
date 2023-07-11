@@ -126,9 +126,7 @@ public interface Node {
                     };
                 }
 
-                default -> Behaviors.stopped(() -> {
-                    throw new AssertionError("only %s".formatted(Setup.class.getName()));
-                });
+                default -> throw new AssertionError("%s only".formatted(Setup.class.getName()));
 
             };
         });
