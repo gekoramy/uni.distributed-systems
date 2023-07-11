@@ -4,23 +4,19 @@ import akka.actor.typed.ActorRef;
 import akka.actor.typed.Behavior;
 import akka.actor.typed.javadsl.Behaviors;
 import it.unitn.Config;
-import org.eclipse.collections.api.collection.ImmutableCollection;
-import org.eclipse.collections.api.factory.Lists;
-import org.eclipse.collections.api.factory.primitive.IntSets;
+import org.eclipse.collections.api.bag.primitive.MutableIntBag;
+import org.eclipse.collections.api.factory.SortedSets;
+import org.eclipse.collections.api.factory.primitive.IntBags;
 import org.eclipse.collections.api.map.ImmutableMap;
 import org.eclipse.collections.api.map.sorted.ImmutableSortedMap;
-import org.eclipse.collections.api.set.primitive.ImmutableIntSet;
 import org.eclipse.collections.api.tuple.Pair;
 import org.eclipse.collections.impl.factory.SortedMaps;
 
 import java.util.TreeMap;
-import java.util.stream.Stream;
 
-import static it.unitn.utils.Comparing.cmp;
-import static it.unitn.utils.Windowing.windowed;
-import static java.util.stream.Collectors.collectingAndThen;
+import static it.unitn.node.Node.ranges;
+import static it.unitn.utils.Extracting.extract;
 import static org.eclipse.collections.impl.collector.Collectors2.toImmutableList;
-import static org.eclipse.collections.impl.collector.Collectors2.toImmutableMap;
 
 public interface Leaving {
 
@@ -65,33 +61,26 @@ public interface Leaving {
         // N = 4
         // 10 20 30 40 50 60 70 80
         //                      XX
-        // ^]       (^ ^^ ^^ ^^ 10
-        // ^^ ^]       (^ ^^ ^^ 20
-        // ^^ ^^ ^]       (^ ^^ 30
-        // ^^ ^^ ^^ ^]       (^ 40
-        // (^ ^^ ^^ ^^ ^]       50
-        //    (^ ^^ ^^ ^^ ^]    60
-        //       (^ ^^ ^^ ^^ ^] 70
+        // ^]        (^^^^^^^^^ 10
+        // ^^^^]        (^^^^^^ 20
+        // ^^^^^^^]        (^^^ 30
+        // ^^^^^^^^^^]        ( 40
+        //  (^^^^^^^^^^^]       50
+        //     (^^^^^^^^^^^]    60
+        //        (^^^^^^^^^^^] 70
 
-        final var keys = toContact.keysView().toImmutableList();
         final var tree = new TreeMap<>(key2word.castToSortedMap());
 
         final var extracts =
-            Stream.of(
-                    keys.subList(keys.size() - config.N(), keys.size()),
-                    keys
-                )
-                .flatMap(ImmutableCollection::stream)
-                .collect(collectingAndThen(toImmutableList(), xs -> windowed(config.N() + 1, xs)))
-                .limit(keys.size())
-                .map(xs -> extract(tree, xs.getFirst(), xs.getLast()))
+            ranges(config, SortedSets.immutable.withSortedSet(new TreeMap<>(toContact.castToSortedMap()).navigableKeySet()))
+                .map(r -> extract(tree, r.gt(), r.lte()))
                 .collect(toImmutableList());
 
         final ImmutableMap<ActorRef<Node.Cmd>, ImmutableSortedMap<Integer, Node.Word>> node2words =
             toContact.valuesView()
                 .toImmutableList()
                 .zip(extracts)
-                .reduceInPlace(toImmutableMap(Pair::getOne, Pair::getTwo));
+                .toImmutableMap(Pair::getOne, Pair::getTwo);
 
         return Behaviors.setup(ctx -> Behaviors.withTimers(timer -> {
 
@@ -107,8 +96,12 @@ public interface Leaving {
                 config.T()
             );
 
-            return tillCovered(parent, node, node2words, IntSets.immutable.withAll(key2word.keysView()));
-
+            return tillCovered(
+                parent,
+                node,
+                node2words,
+                key2word.keysView().reduceInPlace(IntBags.mutable::empty, (acc, k) -> acc.addOccurrences(k, config.W()))
+            );
         }));
     }
 
@@ -116,7 +109,7 @@ public interface Leaving {
         ActorRef<Node.Event> parent,
         int node,
         ImmutableMap<ActorRef<Node.Cmd>, ImmutableSortedMap<Integer, Node.Word>> node2words,
-        ImmutableIntSet toCover
+        MutableIntBag toCover
     ) {
 
         if (toCover.isEmpty()) {
@@ -129,32 +122,25 @@ public interface Leaving {
             });
         }
 
-        return Behaviors.receiveMessage(msg -> switch (msg) {
+        return Behaviors.receive((ctx, msg) -> {
 
-            case Failed x -> Behaviors.stopped(() -> parent.tell(new Node.DidntLeave(x.cause())));
+            ctx.getLog().debug("%s %s".formatted(toCover, msg));
 
-            case Ack x -> tillCovered(
-                parent,
-                node,
-                node2words,
-                toCover.newWithoutAll(node2words.get(x.who()).keysView().collectInt(Integer::intValue))
-            );
+            return switch (msg) {
 
+                case Failed x -> Behaviors.stopped(() -> parent.tell(new Node.DidntLeave(x.cause())));
+
+                case Ack x -> tillCovered(
+                    parent,
+                    node,
+                    node2words,
+                    node2words.get(x.who())
+                        .keysView()
+                        .reduceInPlace(() -> toCover, (acc, k) -> acc.removeOccurrences(k, 1))
+                );
+
+            };
         });
-    }
-
-    private static <V> ImmutableSortedMap<Integer, V> extract(TreeMap<Integer, V> from, int start, int to) {
-        return switch (cmp(start, to)) {
-            case LT -> SortedMaps.immutable.withSortedMap(from.subMap(start, false, to, true));
-            case EQ -> SortedMaps.immutable.empty();
-            case GT -> Lists.immutable.with(
-                    from.tailMap(start, false),
-                    from.headMap(to, true)
-                )
-                .collect(SortedMaps.immutable::ofSortedMap)
-                .reduce(ImmutableSortedMap::newWithMapIterable)
-                .orElseThrow();
-        };
     }
 
 }

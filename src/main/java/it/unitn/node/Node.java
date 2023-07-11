@@ -4,15 +4,20 @@ import akka.actor.typed.ActorRef;
 import akka.actor.typed.Behavior;
 import akka.actor.typed.javadsl.ActorContext;
 import akka.actor.typed.javadsl.Behaviors;
+import akka.actor.typed.javadsl.StashBuffer;
 import it.unitn.Config;
 import it.unitn.root.DidOrDidnt;
+import it.unitn.utils.Range;
+import org.eclipse.collections.api.collection.ImmutableCollection;
 import org.eclipse.collections.api.factory.Lists;
 import org.eclipse.collections.api.factory.SortedMaps;
+import org.eclipse.collections.api.factory.SortedSets;
 import org.eclipse.collections.api.factory.primitive.IntObjectMaps;
 import org.eclipse.collections.api.list.ImmutableList;
 import org.eclipse.collections.api.map.ImmutableMapIterable;
 import org.eclipse.collections.api.map.primitive.ImmutableIntObjectMap;
 import org.eclipse.collections.api.map.sorted.ImmutableSortedMap;
+import org.eclipse.collections.api.set.sorted.ImmutableSortedSet;
 import org.eclipse.collections.api.tuple.Pair;
 import org.eclipse.collections.api.tuple.primitive.IntObjectPair;
 import org.eclipse.collections.impl.tuple.Tuples;
@@ -20,9 +25,15 @@ import org.eclipse.collections.impl.tuple.Tuples;
 import java.math.BigInteger;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.TreeMap;
 import java.util.function.Function;
+import java.util.stream.Stream;
 
 import static it.unitn.utils.Comparing.cmp;
+import static it.unitn.utils.Extracting.extract;
+import static it.unitn.utils.Windowing.windowed;
+import static java.util.stream.Collectors.collectingAndThen;
+import static org.eclipse.collections.impl.collector.Collectors2.toImmutableList;
 import static org.eclipse.collections.impl.collector.Collectors2.toImmutableSortedMap;
 
 public interface Node {
@@ -52,15 +63,19 @@ public interface Node {
 
     record Ask4key2node(ActorRef<Joining.Res4key2node> replyTo) implements Cmd, Common {}
 
+    record Ask4key2word(ActorRef<Joining.Res4key2word> replyTo, int gt, int lte) implements Cmd, Common {}
+
     record Crash() implements Cmd, Common {}
 
     record Recover(ActorRef<DidOrDidnt.Recover> replyTo, ActorRef<Node.Cmd> ref) implements Cmd, Common {}
 
     record Leave(ActorRef<DidOrDidnt.Leave.Didnt> replyTo) implements Cmd {}
 
-    record DidJoin(Config config, ImmutableSortedMap<Integer, ActorRef<Cmd>> key2node) implements Event {}
+    record DidJoin(Config config, ImmutableSortedMap<Integer, ActorRef<Cmd>> key2node, ImmutableSortedMap<Integer, Word> key2word) implements Event {}
 
     record DidntJoin(Throwable cause) implements Event {}
+
+    record DidntJoinSafely(Throwable cause, Config config, ImmutableSortedMap<Integer, ActorRef<Cmd>> key2node, ImmutableSortedMap<Integer, Word> key2word) implements Event {}
 
     record Announce(int node, ActorRef<Cmd> ref) implements Cmd, Common {}
 
@@ -127,7 +142,7 @@ public interface Node {
                 if (Objects.equals(with, ctx.getSelf()))
                     throw new AssertionError("cannot join myself...");
 
-                ctx.spawn(Joining.joining(ctx.getSelf().narrow(), with.narrow()), "joining");
+                ctx.spawn(Joining.joining(ctx.getSelf().narrow(), node, with.narrow()), "joining");
 
                 return Behaviors.<Msg>receiveMessage(msg -> {
 
@@ -139,14 +154,21 @@ public interface Node {
                             x.key2node().forEachValue(ref -> ref.tell(new Announce(node, ctx.getSelf().narrow())));
                             replyTo.tell(new DidOrDidnt.Join.Did(ctx.getSelf().narrow()));
 
-                            final var key2node = x.key2node().newWithKeyValue(node, ctx.getSelf().narrow());
-                            yield stash.unstashAll(redundant(new State(node, x.config(), key2node, SortedMaps.immutable.empty(), IntObjectMaps.immutable.empty(), IntObjectMaps.immutable.empty()))); // TODO
+                            yield stash.unstashAll(
+                                redundant(new State(
+                                    node,
+                                    x.config(),
+                                    x.key2node().newWithKeyValue(node, ctx.getSelf().narrow()),
+                                    x.key2word(),
+                                    IntObjectMaps.immutable.empty(),
+                                    IntObjectMaps.immutable.empty()
+                                ))
+                            );
                         }
 
-                        case DidntJoin x -> {
-                            replyTo.tell(new DidOrDidnt.Join.Didnt(x.cause()));
-                            yield Behaviors.stopped();
-                        }
+                        case DidntJoin x -> Behaviors.stopped(() -> replyTo.tell(new DidOrDidnt.Join.Didnt(x.cause())));
+
+                        case DidntJoinSafely x -> Behaviors.stopped(() -> replyTo.tell(new DidOrDidnt.Join.Didnt(x.cause())));
 
                         default -> {
                             stash.stash(msg);
@@ -239,12 +261,30 @@ public interface Node {
                 yield Behaviors.same();
             }
 
-            case Announce x -> {
-                final var key2node = s.key2node().newWithKeyValue(x.node(), x.ref());
-                yield redundant(new State(s.node(), s.config(), key2node, SortedMaps.immutable.empty(), IntObjectMaps.immutable.empty(), IntObjectMaps.immutable.empty())); // TODO
+            case Ask4key2word x -> {
+                x.replyTo().tell(new Joining.Res4key2word(s.node(), extract(new TreeMap<>(s.key2word().castToSortedMap()), x.gt(), x.lte())));
+                yield Behaviors.same();
             }
 
-            case Crash ignored -> crashed(s.node());
+            case Announce x -> {
+                final var key2node = s.key2node().newWithKeyValue(x.node(), x.ref());
+                final var range =
+                    ranges(s.config(), SortedSets.immutable.ofSortedSet(new TreeMap<>(key2node.castToSortedMap()).navigableKeySet()))
+                        .filter(p -> s.node() == p.lte())
+                        .findAny()
+                        .orElseThrow();
+
+                yield redundant(new State(
+                    s.node(),
+                    s.config(),
+                    key2node,
+                    extract(new TreeMap<>(s.key2word().castToSortedMap()), range.gt(), range.lte()),
+                    IntObjectMaps.immutable.empty(),
+                    IntObjectMaps.immutable.empty()
+                ));
+            }
+
+            case Crash ignored -> crashed(s.node(), s.key2word());
 
             case Recover x -> {
                 x.replyTo().tell(new DidOrDidnt.Recover.Didnt(new AssertionError("not crashed")));
@@ -434,14 +474,14 @@ public interface Node {
         };
     }
 
-    private static Behavior<Msg> crashed(int k) {
+    private static Behavior<Msg> crashed(int node, ImmutableSortedMap<Integer, Word> key2word) {
         return Behaviors.receive((ctx, msg) -> {
 
-            ctx.getLog().info("crashed\n\t%d\n\t%s".formatted(k, msg));
+            ctx.getLog().info("crashed\n\t%d\n\t%s".formatted(node, msg));
 
             return switch (msg) {
 
-                case Recover x -> recovering(x.replyTo(), k, x.ref());
+                case Recover x -> recovering(x.replyTo(), node, x.ref(), key2word);
 
                 default -> Behaviors.same();
 
@@ -449,7 +489,7 @@ public interface Node {
         });
     }
 
-    private static Behavior<Msg> recovering(ActorRef<DidOrDidnt.Recover> replyTo, int node, ActorRef<Cmd> ref) {
+    private static Behavior<Msg> recovering(ActorRef<DidOrDidnt.Recover> replyTo, int node, ActorRef<Cmd> ref, ImmutableSortedMap<Integer, Word> key2word) {
         return Behaviors.withStash(
             1_000_000,
             stash -> Behaviors.setup(ctx -> {
@@ -457,7 +497,7 @@ public interface Node {
                 if (Objects.equals(ref, ctx.getSelf()))
                     throw new AssertionError("cannot recover w/ myself...");
 
-                ctx.spawn(Joining.joining(ctx.getSelf().narrow(), ref.narrow()), "recovering");
+                ctx.spawn(Joining.joining(ctx.getSelf().narrow(), node, ref.narrow()), "recovering");
 
                 return Behaviors.<Msg>receiveMessage(msg -> {
 
@@ -465,22 +505,18 @@ public interface Node {
 
                     return switch (msg) {
 
-                        case DidJoin x -> {
-                            replyTo.tell(new DidOrDidnt.Recover.Did());
+                        case DidJoin x -> recover(replyTo, node, stash, x.config(), x.key2node(), x.key2word());
 
-                            final var key2node = x.key2node().newWithKeyValue(node, ctx.getSelf().narrow());
-                            final var newState = new State(node, x.config(), key2node, SortedMaps.immutable.empty(), IntObjectMaps.immutable.empty(), IntObjectMaps.immutable.empty()); // TODO
-
-                            yield stash.unstashAll(
-                                key2node.size() == x.config().N()
-                                    ? minimal(newState)
-                                    : redundant(newState)
-                            );
-                        }
+                        case DidntJoinSafely x -> recover(replyTo, node, stash, x.config(), x.key2node(), x.key2word());
 
                         case DidntJoin x -> {
                             replyTo.tell(new DidOrDidnt.Recover.Didnt(x.cause()));
-                            yield Behaviors.stopped();
+                            yield crashed(node, key2word);
+                        }
+
+                        case Ask4key2word x -> {
+                            x.replyTo().tell(new Joining.Res4key2word(node, extract(new TreeMap<>(key2word.castToSortedMap()), x.gt(), x.lte())));
+                            yield Behaviors.same();
                         }
 
                         default -> {
@@ -529,6 +565,32 @@ public interface Node {
         );
     }
 
+    private static Behavior<Msg> recover(
+        ActorRef<DidOrDidnt.Recover> replyTo,
+        int node,
+        StashBuffer<Msg> stash,
+        Config config,
+        ImmutableSortedMap<Integer, ActorRef<Cmd>> key2node,
+        ImmutableSortedMap<Integer, Word> words
+    ) {
+        replyTo.tell(new DidOrDidnt.Recover.Did());
+
+        final var newState = new State(
+            node,
+            config,
+            key2node,
+            words,
+            IntObjectMaps.immutable.empty(),
+            IntObjectMaps.immutable.empty()
+        );
+
+        return stash.unstashAll(
+            key2node.size() == config.N()
+                ? minimal(newState)
+                : redundant(newState)
+        );
+    }
+
     static <K extends Comparable<K>, V> ImmutableList<V> clockwise(ImmutableMapIterable<K, V> key2node, K key) {
 
         final var partition = key2node
@@ -538,6 +600,19 @@ public interface Node {
         return Lists.immutable.with(partition.getSelected(), partition.getRejected())
             .flatCollect(x -> x)
             .collect(Pair::getTwo);
+    }
+
+    static Stream<Range> ranges(Config config, ImmutableSortedSet<Integer> keys) {
+        return clusters(config, keys).map(xs -> new Range(xs.getFirst(), xs.getLast()));
+    }
+
+    static Stream<ImmutableList<Integer>> clusters(Config config, ImmutableSortedSet<Integer> keys) {
+        return Stream.of(
+                keys.drop(keys.size() - config.N()),
+                keys
+            )
+            .flatMap(ImmutableCollection::stream)
+            .collect(collectingAndThen(toImmutableList(), xs -> windowed(config.N() + 1, xs)));
     }
 
 }

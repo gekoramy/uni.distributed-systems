@@ -74,6 +74,9 @@ public interface Main {
         root.tell(new Root.Leave(80));
         root.tell(new Root.Recover(10, 20));
         root.tell(new Root.Leave(80));
+        root.tell(new Root.Recover(50, 20));
+        root.tell(new Root.Recover(70, 20));
+        root.tell(new Root.Leave(80));
         root.tell(new Root.Stop());
     }
 }
