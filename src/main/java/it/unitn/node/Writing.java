@@ -18,6 +18,7 @@ import java.util.Optional;
 import java.util.concurrent.TimeoutException;
 
 import static it.unitn.node.Node.DEFAULT;
+import static it.unitn.utils.Shuffling.shuffle;
 
 public interface Writing {
 
@@ -43,7 +44,7 @@ public interface Writing {
         ImmutableList<ActorRef<Void>> toWait
     ) {
 
-        final var toLock = Node.clockwise(key2node, key).take(config.N());
+        final var toLock = shuffle(Node.clockwise(key2node, key).take(config.N()), node);
 
         record Init(ActorRef<DidOrDidnt.Put> replyTo, Config config, int node, int key, Optional<String> value, ImmutableSortedMap<Integer, ActorRef<Node.Cmd>> key2node, ImmutableList<ActorRef<Void>> toWait, ImmutableList<ActorRef<Node.Cmd>> toLock) {}
 

@@ -435,7 +435,7 @@ public interface Node {
             }
 
             case Get x -> {
-                ctx.spawnAnonymous(Reading.init(x.replyTo(), s.config(), x.k(), s.key2node()));
+                ctx.spawnAnonymous(Reading.init(x.replyTo(), s.config(), s.node(), x.k(), s.key2node()));
                 yield same.apply(s);
             }
 
