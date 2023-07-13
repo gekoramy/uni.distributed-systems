@@ -6,6 +6,9 @@ import akka.actor.typed.Terminated;
 import akka.actor.typed.javadsl.Behaviors;
 import it.unitn.Config;
 import it.unitn.root.DidOrDidnt;
+import it.unitn.utils.Logging;
+import it.unitn.utils.MBehavior;
+import it.unitn.utils.MBehaviors;
 import org.eclipse.collections.api.factory.Lists;
 import org.eclipse.collections.api.list.ImmutableList;
 import org.eclipse.collections.api.map.sorted.ImmutableSortedMap;
@@ -30,7 +33,7 @@ public interface Writing {
 
     record Failed(Throwable cause) implements Event {}
 
-    static Behavior<Msg> writing(
+    static Behavior<Msg> init(
         ActorRef<DidOrDidnt.Put> replyTo,
         Config config,
         int node,
@@ -42,15 +45,16 @@ public interface Writing {
 
         final var toLock = Node.clockwise(key2node, key).take(config.N());
 
+        record Init(ActorRef<DidOrDidnt.Put> replyTo, Config config, int node, int key, Optional<String> value, ImmutableSortedMap<Integer, ActorRef<Node.Cmd>> key2node, ImmutableList<ActorRef<Void>> toWait, ImmutableList<ActorRef<Node.Cmd>> toLock) {}
+
         return Behaviors.withTimers(timer -> Behaviors.setup(ctx -> {
             timer.startSingleTimer(new Failed(new TimeoutException()), config.T());
             toWait.forEach(ctx::watch);
-            ctx.getLog().debug("need to wait " + toWait);
-            return precollecting(replyTo, config, node, key, value, toLock, toWait.size());
+            return Logging.logging(ctx.getLog(), new Init(replyTo, config, node, key, value, key2node, toWait, toLock), precollecting(replyTo, config, node, key, value, toLock, toWait.size()));
         }));
     }
 
-    private static Behavior<Msg> precollecting(
+    private static MBehavior<Msg> precollecting(
         ActorRef<DidOrDidnt.Put> replyTo,
         Config config,
         int node,
@@ -61,19 +65,31 @@ public interface Writing {
     ) {
 
         if (toWait == 0) {
-            return Behaviors.setup(ctx -> {
+
+            final var collecting = collecting(replyTo, config, node, key, value, toLock, Lists.immutable.empty(), DEFAULT.version());
+
+            return new MBehavior<>(collecting.state(), Behaviors.setup(ctx -> {
                 toLock.forEach(ref -> ref.tell(new Node.Lock(ctx.getSelf().narrow(), key, node)));
-                return collecting(replyTo, config, node, key, value, toLock, Lists.immutable.empty(), DEFAULT.version());
-            });
+                return collecting.behavior();
+            }));
         }
 
-        return Behaviors.receive(Msg.class)
-            .onMessage(Failed.class, x -> Behaviors.stopped(() -> replyTo.tell(new DidOrDidnt.Put.Didnt(x.cause()))))
-            .onSignal(Terminated.class, ignored -> precollecting(replyTo, config, node, key, value, toLock, toWait - 1))
-            .build();
+        record PreCollecting(int node, int key, Optional<String> value, ImmutableList<ActorRef<Node.Cmd>> toLock, int toWait) {}
+
+        final var state = new PreCollecting(node, key, value, toLock, toWait);
+
+        return new MBehavior<>(
+            state,
+            Behaviors.setup(ctx ->
+                Behaviors.receive(Msg.class)
+                    .onMessage(Failed.class, msg -> Logging.logging(ctx.getLog(), state, msg, MBehaviors.stopped(() -> replyTo.tell(new DidOrDidnt.Put.Didnt(msg.cause())))))
+                    .onSignal(Terminated.class, s -> Logging.logging(ctx.getLog(), state, s, precollecting(replyTo, config, node, key, value, toLock, toWait - 1)))
+                    .build()
+            )
+        );
     }
 
-    private static Behavior<Msg> collecting(
+    private static MBehavior<Msg> collecting(
         ActorRef<DidOrDidnt.Put> replyTo,
         Config config,
         int node,
@@ -85,7 +101,7 @@ public interface Writing {
     ) {
 
         if (locked.size() == config.W()) {
-            return Behaviors.stopped(() -> {
+            return MBehaviors.stopped(() -> {
                 final var v = version.add(BigInteger.valueOf(node));
                 locked.forEach(ref -> ref.tell(new Node.Write(node, key, new Node.Word(value, v))));
                 toUnlock.forEach(ref -> ref.tell(new Node.Unlock(key, node)));
@@ -93,18 +109,24 @@ public interface Writing {
             });
         }
 
-        return Behaviors.receiveMessage(msg -> switch (msg) {
-            case Ack x ->
-                collecting(replyTo, config, node, key, value, toUnlock, locked.newWith(x.replyTo()), version.max(x.version()));
-            case Skip x -> Behaviors.stopped(() -> {
-                toUnlock.forEach(ref -> ref.tell(new Node.Unlock(key, node)));
-                replyTo.tell(new DidOrDidnt.Put.Did(x.version()));
-            });
-            case Failed x -> Behaviors.stopped(() -> {
-                toUnlock.forEach(ref -> ref.tell(new Node.Unlock(key, node)));
-                replyTo.tell(new DidOrDidnt.Put.Didnt(x.cause()));
-            });
-        });
+        record Collecting(int node, int key, Optional<String> value, ImmutableList<ActorRef<Node.Cmd>> toUnlock, ImmutableList<ActorRef<Node.Write>> locked, BigInteger version) {}
+
+        final var state = new Collecting(node, key, value, toUnlock, locked, version);
+
+        return new MBehavior<>(
+            state,
+            Behaviors.receive((ctx, msg) -> Logging.logging(ctx.getLog(), state, msg, switch (msg) {
+                case Ack x -> collecting(replyTo, config, node, key, value, toUnlock, locked.newWith(x.replyTo()), version.max(x.version()));
+                case Skip x -> MBehaviors.stopped(() -> {
+                    toUnlock.forEach(ref -> ref.tell(new Node.Unlock(key, node)));
+                    replyTo.tell(new DidOrDidnt.Put.Did(x.version()));
+                });
+                case Failed x -> MBehaviors.stopped(() -> {
+                    toUnlock.forEach(ref -> ref.tell(new Node.Unlock(key, node)));
+                    replyTo.tell(new DidOrDidnt.Put.Didnt(x.cause()));
+                });
+            }))
+        );
     }
 
 }

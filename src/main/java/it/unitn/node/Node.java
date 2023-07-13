@@ -4,9 +4,11 @@ import akka.actor.typed.ActorRef;
 import akka.actor.typed.Behavior;
 import akka.actor.typed.javadsl.ActorContext;
 import akka.actor.typed.javadsl.Behaviors;
-import akka.actor.typed.javadsl.StashBuffer;
 import it.unitn.Config;
 import it.unitn.root.DidOrDidnt;
+import it.unitn.utils.Logging;
+import it.unitn.utils.MBehavior;
+import it.unitn.utils.MBehaviors;
 import it.unitn.utils.Range;
 import org.eclipse.collections.api.collection.ImmutableCollection;
 import org.eclipse.collections.api.factory.Lists;
@@ -97,121 +99,115 @@ public interface Node {
 
     record Write(int node, int k, Word word) implements Cmd, Common {}
 
-    record DidWrite(int k, ActorRef<Void> who) implements Event, Common {}
+    record Wrote(int k, ActorRef<Void> who) implements Event, Common {}
 
     record Read(ActorRef<Reading.DidRead> replyTo, int k) implements Cmd, Common {}
 
     static Behavior<Msg> newbie(int node) {
-        return Behaviors.receive((ctx, msg) -> {
 
-            ctx.getLog().info("newbie\n\t%d\n\t%s".formatted(node, msg));
+        record Newbie(int node) {}
 
-            return switch (msg) {
+        return Behaviors.receive((ctx, msg) -> Logging.logging(ctx.getLog(), new Newbie(node), msg, switch (msg) {
 
-                case Setup x -> {
+            case Setup x -> {
 
-                    final var s = new State(
-                        node,
-                        x.config(),
-                        x.key2node().keyValuesView().reduceInPlace(toImmutableSortedMap(IntObjectPair::getOne, IntObjectPair::getTwo)),
-                        SortedMaps.immutable.empty(),
-                        IntObjectMaps.immutable.empty(),
-                        IntObjectMaps.immutable.empty()
-                    );
+                final var s = new State(
+                    node,
+                    x.config(),
+                    x.key2node().keyValuesView().reduceInPlace(toImmutableSortedMap(IntObjectPair::getOne, IntObjectPair::getTwo)),
+                    SortedMaps.immutable.empty(),
+                    IntObjectMaps.immutable.empty(),
+                    IntObjectMaps.immutable.empty()
+                );
 
-                    yield switch (cmp(x.key2node().size(), x.config().N())) {
-                        case LT -> throw new AssertionError("|key2node| >= N");
-                        case EQ -> minimal(s);
-                        case GT -> redundant(s);
-                    };
-                }
+                yield switch (cmp(x.key2node().size(), x.config().N())) {
+                    case LT -> throw new AssertionError("|key2node| >= N");
+                    case EQ -> minimal(s);
+                    case GT -> redundant(s);
+                };
+            }
 
-                default -> throw new AssertionError("%s only".formatted(Setup.class.getName()));
+            default -> throw new AssertionError("%s only".formatted(Setup.class.getName()));
 
-            };
-        });
+        }));
     }
 
     static Behavior<Msg> newbie(ActorRef<DidOrDidnt.Join> replyTo, int node, ActorRef<Cmd> with) {
-        return Behaviors.withStash(
-            1_000_000,
-            stash -> Behaviors.setup(ctx -> {
 
-                if (Objects.equals(with, ctx.getSelf()))
-                    throw new AssertionError("cannot join myself...");
+        record Newbie(ActorRef<DidOrDidnt.Join> replyTo, int node, ActorRef<Cmd> with) {}
 
-                ctx.spawn(Joining.joining(ctx.getSelf().narrow(), node, with.narrow()), "joining");
+        return Behaviors.setup(ctx -> {
 
-                return Behaviors.<Msg>receiveMessage(msg -> {
+            if (Objects.equals(with, ctx.getSelf()))
+                throw new AssertionError("cannot join myself...");
 
-                    ctx.getLog().info("newbie\n\t%d\n\t%s".formatted(node, msg));
+            ctx.spawn(Joining.init(ctx.getSelf().narrow(), node, with.narrow()), "joining");
 
-                    return switch (msg) {
+            return Behaviors.receiveMessage(msg -> Logging.logging(ctx.getLog(), new Newbie(replyTo, node, with), msg, switch (msg) {
 
-                        case DidJoin x -> {
-                            x.key2node().forEachValue(ref -> ref.tell(new Announce(node, ctx.getSelf().narrow())));
-                            replyTo.tell(new DidOrDidnt.Join.Did(ctx.getSelf().narrow()));
+                case DidJoin x -> {
+                    x.key2node().forEachValue(ref -> ref.tell(new Announce(node, ctx.getSelf().narrow())));
+                    replyTo.tell(new DidOrDidnt.Join.Did(ctx.getSelf().narrow()));
 
-                            yield stash.unstashAll(
-                                redundant(new State(
-                                    node,
-                                    x.config(),
-                                    x.key2node().newWithKeyValue(node, ctx.getSelf().narrow()),
-                                    x.key2word(),
-                                    IntObjectMaps.immutable.empty(),
-                                    IntObjectMaps.immutable.empty()
-                                ))
-                            );
-                        }
+                    yield redundant(new State(
+                        node,
+                        x.config(),
+                        x.key2node().newWithKeyValue(node, ctx.getSelf().narrow()),
+                        x.key2word(),
+                        IntObjectMaps.immutable.empty(),
+                        IntObjectMaps.immutable.empty()
+                    ));
+                }
 
-                        case DidntJoin x -> Behaviors.stopped(() -> replyTo.tell(new DidOrDidnt.Join.Didnt(x.cause())));
+                case DidntJoin x -> MBehaviors.<Msg>stopped(() -> replyTo.tell(new DidOrDidnt.Join.Didnt(x.cause())));
 
-                        case DidntJoinSafely x -> Behaviors.stopped(() -> replyTo.tell(new DidOrDidnt.Join.Didnt(x.cause())));
+                case DidntJoinSafely x -> MBehaviors.<Msg>stopped(() -> replyTo.tell(new DidOrDidnt.Join.Didnt(x.cause())));
 
-                        default -> {
-                            stash.stash(msg);
-                            yield Behaviors.same();
-                        }
+                default -> throw new AssertionError("%s only".formatted(Lists.immutable.of(DidJoin.class, DidntJoin.class, DidntJoinSafely.class).collect(Class::getName)));
 
-                    };
-                });
-            })
-        );
+            }));
+
+        });
     }
 
-    private static Behavior<Msg> minimal(State s) {
-        return Behaviors.receive((ctx, msg) -> {
+    private static MBehavior<Msg> minimal(State s) {
 
-            ctx.getLog().info("minimal\n\t%s\n\t%s".formatted(s, msg));
+        record Minimal(State s) {}
 
-            return switch (msg) {
+        final var state = new Minimal(s);
+
+        return new MBehavior<>(
+            state,
+            Behaviors.receive((ctx, msg) -> Logging.logging(ctx.getLog(), state, msg, switch (msg) {
 
                 case Leave x -> {
                     x.replyTo().tell(new DidOrDidnt.Leave.Didnt(new AssertionError("cannot leave")));
-                    yield Behaviors.same();
+                    yield minimal(s);
                 }
 
                 case Common x -> common(s, ctx, x, Node::minimal);
 
-                default -> Behaviors.same();
+                default -> minimal(s);
 
-            };
-
-        });
+            }))
+        );
     }
 
-    private static Behavior<Msg> redundant(State s) {
-        return Behaviors.receive((ctx, msg) -> {
+    private static MBehavior<Msg> redundant(State s) {
 
-            ctx.getLog().info("redundant\n\t%s\n\t%s".formatted(s, msg));
+        record Redundant(State s) {}
 
-            return switch (msg) {
+        final var state = new Redundant(s);
+
+        return new MBehavior<>(
+            state,
+            Behaviors.receive((ctx, msg) -> Logging.logging(ctx.getLog(), state, msg, switch (msg) {
 
                 case Leave x -> leaving(x.replyTo(), s);
 
                 case Ping x -> {
                     x.replyTo().tell(new Leaving.Ack(ctx.getSelf().narrow()));
-                    yield Behaviors.same();
+                    yield redundant(s);
                 }
 
                 case AnnounceLeaving x -> {
@@ -239,29 +235,28 @@ public interface Node {
 
                 case Common x -> common(s, ctx, x, Node::redundant);
 
-                default -> Behaviors.same();
+                default -> redundant(s);
 
-            };
-
-        });
+            }))
+        );
     }
 
-    private static Behavior<Msg> common(
+    private static MBehavior<Msg> common(
         State s,
         ActorContext<Msg> ctx,
         Common msg,
-        Function<State, Behavior<Msg>> same
+        Function<State, MBehavior<Msg>> same
     ) {
         return switch (msg) {
 
             case Ask4key2node x -> {
                 x.replyTo().tell(new Joining.Res4key2node(s.config(), s.key2node()));
-                yield Behaviors.same();
+                yield same.apply(s);
             }
 
             case Ask4key2word x -> {
                 x.replyTo().tell(new Joining.Res4key2word(s.node(), extract(new TreeMap<>(s.key2word().castToSortedMap()), x.gt(), x.lte())));
-                yield Behaviors.same();
+                yield same.apply(s);
             }
 
             case Announce x -> {
@@ -286,7 +281,7 @@ public interface Node {
 
             case Recover x -> {
                 x.replyTo().tell(new DidOrDidnt.Recover.Didnt(new AssertionError("not crashed")));
-                yield Behaviors.same();
+                yield same.apply(s);
             }
 
             case Lock x -> {
@@ -367,7 +362,7 @@ public interface Node {
 
                 case EQ -> throw new AssertionError("impossible");
 
-                case LT -> Behaviors.same();
+                case LT -> same.apply(s);
 
                 case GT -> {
 
@@ -404,10 +399,10 @@ public interface Node {
                 final var toWait = s.key2writing().getIfAbsent(x.k(), Lists.immutable::empty);
 
                 final ActorRef<Void> task = ctx.spawnAnonymous(
-                    Writing.writing(x.replyTo(), s.config(), s.node(), x.k(), x.value(), s.key2node(), toWait)
+                    Writing.init(x.replyTo(), s.config(), s.node(), x.k(), x.value(), s.key2node(), toWait)
                 ).unsafeUpcast();
 
-                ctx.watchWith(task, new DidWrite(x.k(), task));
+                ctx.watchWith(task, new Wrote(x.k(), task));
 
                 yield same.apply(
                     new State(
@@ -421,7 +416,7 @@ public interface Node {
                 );
             }
 
-            case DidWrite x -> {
+            case Wrote x -> {
 
                 final var toWait = s.key2writing().get(x.k()).newWithout(x.who());
 
@@ -440,8 +435,8 @@ public interface Node {
             }
 
             case Get x -> {
-                ctx.spawnAnonymous(Reading.reading(x.replyTo(), s.config(), x.k(), s.key2node()));
-                yield Behaviors.same();
+                ctx.spawnAnonymous(Reading.init(x.replyTo(), s.config(), x.k(), s.key2node()));
+                yield same.apply(s);
             }
 
             case Read x -> {
@@ -451,7 +446,7 @@ public interface Node {
                 if (lock == null) {
                     final var word = s.key2word().getOrDefault(x.k(), DEFAULT);
                     x.replyTo().tell(new Reading.DidRead(word));
-                    yield Behaviors.same();
+                    yield same.apply(s);
                 }
 
                 final var node2ref = lock.getOne();
@@ -472,101 +467,108 @@ public interface Node {
         };
     }
 
-    private static Behavior<Msg> crashed(int node, ImmutableSortedMap<Integer, Word> key2word) {
-        return Behaviors.receive((ctx, msg) -> {
+    private static MBehavior<Msg> crashed(int node, ImmutableSortedMap<Integer, Word> key2word) {
 
-            ctx.getLog().info("crashed\n\t%d\n\t%s".formatted(node, msg));
+        record Crashed(int node, ImmutableSortedMap<Integer, Word> key2word) {}
 
-            return switch (msg) {
+        final var state = new Crashed(node, key2word);
 
-                case Recover x -> recovering(x.replyTo(), node, x.ref(), key2word);
+        return new MBehavior<>(
+            state,
+            Behaviors.receive((ctx, msg) -> Logging.logging(ctx.getLog(), state, msg, switch (msg) {
 
-                default -> Behaviors.same();
+                case Recover x -> prerecovering(x.replyTo(), node, x.ref(), key2word);
 
-            };
-        });
+                default -> crashed(node, key2word);
+
+            }))
+        );
     }
 
-    private static Behavior<Msg> recovering(ActorRef<DidOrDidnt.Recover> replyTo, int node, ActorRef<Cmd> ref, ImmutableSortedMap<Integer, Word> key2word) {
-        return Behaviors.withStash(
-            1_000_000,
-            stash -> Behaviors.setup(ctx -> {
+    private static MBehavior<Msg> prerecovering(ActorRef<DidOrDidnt.Recover> replyTo, int node, ActorRef<Cmd> ref, ImmutableSortedMap<Integer, Word> key2word) {
+
+        record PreRecovering(ActorRef<DidOrDidnt.Recover> replyTo, int node, ActorRef<Cmd> ref, ImmutableSortedMap<Integer, Word> key2word) {}
+
+        final var state = new PreRecovering(replyTo, node, ref, key2word);
+
+        return new MBehavior<>(
+            state,
+            Behaviors.setup(ctx -> {
 
                 if (Objects.equals(ref, ctx.getSelf()))
                     throw new AssertionError("cannot recover w/ myself...");
 
-                ctx.spawn(Joining.joining(ctx.getSelf().narrow(), node, ref.narrow()), "recovering");
+                ctx.spawn(Joining.init(ctx.getSelf().narrow(), node, ref.narrow()), "recovering");
 
-                return Behaviors.<Msg>receiveMessage(msg -> {
+                return Logging.logging(ctx.getLog(), state, recovering(replyTo, node, key2word));
 
-                    ctx.getLog().info("recovering\n\t%d\n\t%s".formatted(node, msg));
-
-                    return switch (msg) {
-
-                        case DidJoin x -> recover(replyTo, node, stash, x.config(), x.key2node(), x.key2word());
-
-                        case DidntJoinSafely x -> recover(replyTo, node, stash, x.config(), x.key2node(), x.key2word());
-
-                        case DidntJoin x -> {
-                            replyTo.tell(new DidOrDidnt.Recover.Didnt(x.cause()));
-                            yield crashed(node, key2word);
-                        }
-
-                        case Ask4key2word x -> {
-                            x.replyTo().tell(new Joining.Res4key2word(node, extract(new TreeMap<>(key2word.castToSortedMap()), x.gt(), x.lte())));
-                            yield Behaviors.same();
-                        }
-
-                        default -> {
-                            stash.stash(msg);
-                            yield Behaviors.same();
-                        }
-
-                    };
-                });
             })
         );
     }
 
-    private static Behavior<Msg> leaving(ActorRef<DidOrDidnt.Leave.Didnt> replyTo, State s) {
-        return Behaviors.withStash(
-            1_000_000,
-            stash -> Behaviors.setup(ctx -> {
+    private static MBehavior<Msg> recovering(ActorRef<DidOrDidnt.Recover> replyTo, int node, ImmutableSortedMap<Integer, Word> key2word) {
 
-                ctx.spawn(Leaving.leaving(ctx.getSelf().narrow(), s.config(), s.node(), s.key2node(), s.key2word()), "leaving");
+        record Recovering(ActorRef<DidOrDidnt.Recover> replyTo, int node, ImmutableSortedMap<Integer, Word> key2word) {}
 
-                return Behaviors.<Msg>receiveMessage(msg -> {
+        final var state = new Recovering(replyTo, node, key2word);
 
-                    ctx.getLog().info("leaving\n\t%s\n\t%s".formatted(s, msg));
+        return new MBehavior<>(
+            state,
+            Behaviors.receive((ctx, msg) -> Logging.logging(ctx.getLog(), state, msg, switch (msg) {
 
-                    return switch (msg) {
+                case DidJoin x -> recover(replyTo, node, x.config(), x.key2node(), x.key2word());
 
-                        case DidLeave ignored -> Behaviors.stopped();
+                case DidntJoinSafely x -> recover(replyTo, node, x.config(), x.key2node(), x.key2word());
 
-                        case DidntLeave x -> {
-                            replyTo.tell(new DidOrDidnt.Leave.Didnt(x.cause()));
-                            yield stash.unstashAll(
-                                s.key2node().size() == s.config().N()
-                                    ? minimal(s)
-                                    : redundant(s)
-                            );
-                        }
+                case DidntJoin x -> {
+                    replyTo.tell(new DidOrDidnt.Recover.Didnt(x.cause()));
+                    yield crashed(node, key2word);
+                }
 
-                        default -> {
-                            stash.stash(msg);
-                            yield Behaviors.same();
-                        }
+                case Ask4key2word x -> {
+                    x.replyTo().tell(new Joining.Res4key2word(node, extract(new TreeMap<>(key2word.castToSortedMap()), x.gt(), x.lte())));
+                    yield recovering(replyTo, node, key2word);
+                }
 
-                    };
-                });
+                default -> throw new AssertionError("%s only".formatted(Lists.immutable.of(DidJoin.class, DidntJoin.class, DidntJoinSafely.class, Ask4key2node.class).collect(Class::getName)));
+
+            }))
+        );
+    }
+
+    private static MBehavior<Msg> leaving(ActorRef<DidOrDidnt.Leave.Didnt> replyTo, State s) {
+
+        record Leaving(ActorRef<DidOrDidnt.Leave.Didnt> replyTo, State s) {}
+
+        final var state = new Leaving(replyTo, s);
+
+        return new MBehavior<>(
+            state,
+            Behaviors.setup(ctx -> {
+
+                ctx.spawn(it.unitn.node.Leaving.init(ctx.getSelf().narrow(), s.config(), s.node(), s.key2node(), s.key2word()), "leaving");
+
+                return Behaviors.receiveMessage(msg -> Logging.logging(ctx.getLog(), state, msg, switch (msg) {
+
+                    case DidLeave ignored -> MBehaviors.<Msg>stopped();
+
+                    case DidntLeave x -> {
+                        replyTo.tell(new DidOrDidnt.Leave.Didnt(x.cause()));
+                        yield s.key2node().size() == s.config().N()
+                            ? minimal(s)
+                            : redundant(s);
+                    }
+
+                    default -> throw new AssertionError("%s only".formatted(Lists.immutable.of(DidLeave.class, DidntLeave.class).collect(Class::getName)));
+
+                }));
             })
         );
     }
 
-    private static Behavior<Msg> recover(
+    private static MBehavior<Msg> recover(
         ActorRef<DidOrDidnt.Recover> replyTo,
         int node,
-        StashBuffer<Msg> stash,
         Config config,
         ImmutableSortedMap<Integer, ActorRef<Cmd>> key2node,
         ImmutableSortedMap<Integer, Word> words
@@ -582,11 +584,9 @@ public interface Node {
             IntObjectMaps.immutable.empty()
         );
 
-        return stash.unstashAll(
-            key2node.size() == config.N()
-                ? minimal(newState)
-                : redundant(newState)
-        );
+        return key2node.size() == config.N()
+            ? minimal(newState)
+            : redundant(newState);
     }
 
     static <K extends Comparable<K>, V> ImmutableList<V> clockwise(ImmutableMapIterable<K, V> key2node, K key) {

@@ -4,6 +4,9 @@ import akka.actor.typed.ActorRef;
 import akka.actor.typed.Behavior;
 import akka.actor.typed.javadsl.Behaviors;
 import it.unitn.Config;
+import it.unitn.utils.Logging;
+import it.unitn.utils.MBehavior;
+import it.unitn.utils.MBehaviors;
 import it.unitn.utils.Range;
 import org.eclipse.collections.api.factory.Lists;
 import org.eclipse.collections.api.factory.SortedMaps;
@@ -35,11 +38,16 @@ public interface Joining {
 
     record Failed(Throwable cause) implements Msg {}
 
-    static Behavior<Msg> joining(
+    static Behavior<Msg> init(
         ActorRef<Node.Event> parent,
         int node,
         ActorRef<Node.Ask4key2node> ref
     ) {
+
+        record Init(int node, ActorRef<Node.Ask4key2node> ref) {}
+
+        final var state = new Init(node, ref);
+
         return Behaviors.setup(ctx -> {
 
             ctx.ask(
@@ -50,20 +58,19 @@ public interface Joining {
                 (r, t) -> r != null ? r : new Failed(t)
             );
 
-            return Behaviors.<Msg>receiveMessage(msg -> switch (msg) {
+            return Behaviors.receiveMessage(msg -> Logging.logging(ctx.getLog(), state, msg, switch (msg) {
 
-                case Failed x -> Behaviors.stopped(() -> parent.tell(new Node.DidntJoin(x.cause())));
+                case Failed x -> MBehaviors.<Msg>stopped(() -> parent.tell(new Node.DidntJoin(x.cause())));
 
                 case Res4key2node x -> precollecting(parent, x.config, node, x.key2node());
 
-                case Res4key2word ignored -> Behaviors.same();
+                case Res4key2word ignored -> throw new AssertionError("Res4key2node only");
 
-            });
-
+            }));
         });
     }
 
-    static Behavior<Msg> precollecting(
+    static MBehavior<Msg> precollecting(
         ActorRef<Node.Event> parent,
         Config config,
         int node,
@@ -181,26 +188,31 @@ public interface Joining {
         final var key2range =
             overlapping.toImmutableMap(p -> p.getOne().getOne(), Pair::getTwo);
 
-        return Behaviors.setup(ctx -> Behaviors.withTimers(timer -> {
+        record PreCollecting(int node, Config config, ImmutableSortedMap<Integer, ActorRef<Node.Cmd>> key2node, Range range, ImmutableList<Range> ranges) {}
 
-            overlapping.forEach(p -> p.getOne().getTwo().tell(new Node.Ask4key2word(ctx.getSelf().narrow(), range.gt(), range.lte())));
+        final var state = new PreCollecting(node, config, key2node, range, ranges);
 
-            timer.startSingleTimer(new Failed(new AssertionError("not enough key2word")), config.T());
+        return new MBehavior<>(
+            state,
+            Behaviors.setup(ctx -> Behaviors.withTimers(timer -> {
 
-            return collecting(
-                parent,
-                config,
-                key2node,
-                key2range,
-                SortedMaps.mutable.empty(),
-                units.collect(x -> PrimitiveTuples.pair(x, config.R()))
-            );
+                overlapping.forEach(p -> p.getOne().getTwo().tell(new Node.Ask4key2word(ctx.getSelf().narrow(), range.gt(), range.lte())));
 
-        }));
+                timer.startSingleTimer(new Failed(new AssertionError("not enough key2word")), config.T());
 
+                return Logging.logging(ctx.getLog(), state, collecting(
+                    parent,
+                    config,
+                    key2node,
+                    key2range,
+                    SortedMaps.mutable.empty(),
+                    units.collect(x -> PrimitiveTuples.pair(x, config.R()))
+                ));
+            }))
+        );
     }
 
-    static Behavior<Msg> collecting(
+    static MBehavior<Msg> collecting(
         ActorRef<Node.Event> parent,
         Config config,
         ImmutableSortedMap<Integer, ActorRef<Node.Cmd>> key2node,
@@ -210,19 +222,20 @@ public interface Joining {
     ) {
 
         if (toCover.isEmpty()) {
-            return Behaviors.stopped(() -> parent.tell(new Node.DidJoin(config, key2node, key2word.toImmutable())));
+            return MBehaviors.stopped(() -> parent.tell(new Node.DidJoin(config, key2node, key2word.toImmutable())));
         }
 
-        return Behaviors.setup(ctx -> {
+        record Collecting(MutableSortedMap<Integer, Node.Word> key2word, ImmutableList<ObjectIntPair<Range>> toCover) {}
 
-            ctx.getLog().trace(toCover.toString());
+        final var state = new Collecting(key2word, toCover);
 
-            return Behaviors.<Msg>receiveMessage(msg -> switch (msg) {
+        return new MBehavior<>(
+            state,
+            Behaviors.receive((ctx, msg) -> Logging.logging(ctx.getLog(), state, msg, switch (msg) {
 
-                case Failed x ->
-                    Behaviors.stopped(() -> parent.tell(new Node.DidntJoinSafely(x.cause(), config, key2node, key2word.toImmutable())));
+                case Failed x -> MBehaviors.stopped(() -> parent.tell(new Node.DidntJoinSafely(x.cause(), config, key2node, key2word.toImmutable())));
 
-                case Res4key2node ignored -> Behaviors.same();
+                case Res4key2node ignored -> throw new AssertionError("%s only".formatted(Res4key2word.class));
 
                 case Res4key2word x -> collecting(
                     parent,
@@ -246,9 +259,8 @@ public interface Joining {
                         )
                         .reject(p -> p.getTwo() == 0)
                 );
-
-            });
-        });
+            }))
+        );
     }
 
 }

@@ -2,7 +2,7 @@
 <configuration status="INFO">
     <appenders>
         <console name="console" target="SYSTEM_OUT">
-            <patternlayout pattern="%date{ABSOLUTE} [%highlight{%-5level}] %c{1.}:%L :: %msg%n"/>
+            <patternlayout pattern="%date{ABSOLUTE} [%highlight{%-5level}] %c{1.}:%L %X{akkaSource} :: %msg%n"/>
         </console>
     </appenders>
     <loggers>
