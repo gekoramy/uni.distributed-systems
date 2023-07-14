@@ -589,9 +589,9 @@ public interface Node {
             : redundant(newState);
     }
 
-    static <K extends Comparable<K>, V> ImmutableList<V> clockwise(ImmutableMapIterable<K, V> key2node, K key) {
+    static <K extends Comparable<K>, V> ImmutableList<V> clockwise(ImmutableMapIterable<K, V> key2value, K key) {
 
-        final var partition = key2node
+        final var partition = key2value
             .keyValuesView()
             .partition(x -> x.getOne().compareTo(key) >= 0);
 
