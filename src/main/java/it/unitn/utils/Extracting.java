@@ -13,7 +13,7 @@ public interface Extracting {
     static <K extends Comparable<K>, V> ImmutableSortedMap<K, V> extract(TreeMap<K, V> from, K gt, K lte) {
         return switch (cmp(gt, lte)) {
             case LT -> SortedMaps.immutable.withSortedMap(from.subMap(gt, false, lte, true));
-            case EQ -> SortedMaps.immutable.empty();
+            case EQ -> SortedMaps.immutable.withSortedMap(from);
             case GT -> Lists.immutable.with(
                     from.tailMap(gt, false),
                     from.headMap(lte, true)
