@@ -26,10 +26,6 @@ import static it.unitn.node.Node.newbie;
 
 public interface Root {
 
-    record State(
-        ImmutableIntObjectMap<ActorRef<Node.Cmd>> key2node
-    ) {}
-
     sealed interface Msg {}
 
     sealed interface Cmd extends Msg {}
@@ -54,7 +50,7 @@ public interface Root {
 
     record Clients(ImmutableList<ImmutableList<GetOrPut>> clients) implements Cmd {}
 
-    record Resume(State s) implements Event {}
+    record Resume(ImmutableIntObjectMap<ActorRef<Node.Cmd>> key2node) implements Event {}
 
     static Behavior<Msg> init(Config config, ImmutableIntSet keys) {
 
@@ -91,16 +87,16 @@ public interface Root {
 
             key2node.forEach(ref -> ref.tell(new Node.Setup(config, key2node)));
 
-            return Logging.logging(ctx.getLog(), new Init(config, keys), available(new State(key2node)));
+            return Logging.logging(ctx.getLog(), new Init(config, keys), available(key2node));
 
         });
     }
 
-    private static MBehavior<Msg> available(State s) {
+    private static MBehavior<Msg> available(ImmutableIntObjectMap<ActorRef<Node.Cmd>> key2node) {
 
-        record Available(State s) {}
+        record Available(ImmutableIntObjectMap<ActorRef<Node.Cmd>> key2node) {}
 
-        final var state = new Available(s);
+        final var state = new Available(key2node);
 
         return new MBehavior<>(
             state,
@@ -113,19 +109,19 @@ public interface Root {
                     if (x.who() <= 0)
                         throw new AssertionError("who > 0");
 
-                    if (s.key2node().containsKey(x.who())) {
+                    if (key2node.containsKey(x.who())) {
                         ctx.getLog().debug("node %2d already present".formatted(x.who()));
-                        yield available(s);
+                        yield available(key2node);
                     }
 
-                    final var with = s.key2node().get(x.with());
+                    final var with = key2node.get(x.with());
 
                     if (with == null) {
                         ctx.getLog().debug("node %2d missing".formatted(x.with()));
-                        yield available(s);
+                        yield available(key2node);
                     }
 
-                    final var task = ctx.spawnAnonymous(onDDJoin(ctx.getSelf(), s, x.who()));
+                    final var task = ctx.spawnAnonymous(onDDJoin(ctx.getSelf(), key2node, x.who()));
                     ctx.spawn(newbie(task, x.who(), with).narrow(), Integer.toString(x.who()));
 
                     yield blocked();
@@ -134,37 +130,37 @@ public interface Root {
 
                 case Crash x -> {
 
-                    final var missing = x.who().difference(s.key2node().keySet());
+                    final var missing = x.who().difference(key2node.keySet());
 
                     if (!missing.isEmpty()) {
                         ctx.getLog().debug("missing nodes : %s".formatted(missing));
-                        yield available(s);
+                        yield available(key2node);
                     }
 
                     x.who()
-                        .collect(s.key2node()::get, Lists.mutable.empty())
+                        .collect(key2node::get, Lists.mutable.empty())
                         .forEach(node -> node.tell(new Node.Crash()));
 
-                    yield available(s);
+                    yield available(key2node);
 
                 }
 
                 case Recover x -> {
 
-                    final var who = s.key2node().get(x.who());
-                    final var with = s.key2node().get(x.with());
+                    final var who = key2node.get(x.who());
+                    final var with = key2node.get(x.with());
 
                     if (who == null) {
                         ctx.getLog().debug("node %2d missing".formatted(x.who()));
-                        yield available(s);
+                        yield available(key2node);
                     }
 
                     if (with == null) {
                         ctx.getLog().debug("node %2d missing".formatted(x.with()));
-                        yield available(s);
+                        yield available(key2node);
                     }
 
-                    final var task = ctx.spawnAnonymous(onDDRecover(ctx.getSelf(), s));
+                    final var task = ctx.spawnAnonymous(onDDRecover(ctx.getSelf(), key2node));
 
                     who.tell(new Node.Recover(task, with));
 
@@ -174,14 +170,14 @@ public interface Root {
 
                 case Leave x -> {
 
-                    final var who = s.key2node().get(x.who());
+                    final var who = key2node.get(x.who());
 
                     if (who == null) {
                         ctx.getLog().debug("node %2d missing".formatted(x.who()));
-                        yield available(s);
+                        yield available(key2node);
                     }
 
-                    final var task = ctx.spawnAnonymous(onDDLeave(ctx.getSelf(), s, x.who(), who));
+                    final var task = ctx.spawnAnonymous(onDDLeave(ctx.getSelf(), key2node, x.who(), who));
 
                     who.tell(new Node.Leave(task.narrow()));
 
@@ -193,19 +189,19 @@ public interface Root {
 
                     final var missing = x.clients()
                         .flatCollectInt(gps -> gps.collectInt(GetOrPut::who), IntSets.mutable.empty())
-                        .difference(s.key2node().keySet());
+                        .difference(key2node.keySet());
 
                     if (!missing.isEmpty()) {
                         ctx.getLog().debug("missing nodes : %s".formatted(missing));
-                        yield available(s);
+                        yield available(key2node);
                     }
 
                     final var clients = x.clients()
-                        .collect(gps -> gps.collect(gp -> convert(s, gp)))
+                        .collect(gps -> gps.collect(gp -> convert(key2node, gp)))
                         .collect(queue -> ctx.spawnAnonymous(Client.sequentially(queue).behavior()), Sets.mutable.empty())
                         .toImmutable();
 
-                    ctx.spawnAnonymous(tillTerminated(ctx.getSelf(), s, clients));
+                    ctx.spawnAnonymous(tillTerminated(ctx.getSelf(), key2node, clients));
 
                     yield blocked();
 
@@ -214,7 +210,7 @@ public interface Root {
                 case Resume x -> {
 
                     ctx.getLog().error("unexpected %s".formatted(x));
-                    yield available(s);
+                    yield available(key2node);
 
                 }
 
@@ -234,7 +230,7 @@ public interface Root {
                 1_000_000,
                 buffer -> Behaviors.receive((ctx, msg) -> switch (msg) {
 
-                    case Resume x -> buffer.unstashAll(Logging.logging(ctx.getLog(), state, msg, available(x.s())));
+                    case Resume x -> buffer.unstashAll(Logging.logging(ctx.getLog(), state, msg, available(x.key2node())));
 
                     default -> {
                         buffer.stash(msg);
@@ -247,18 +243,18 @@ public interface Root {
 
     private static Behavior<DidOrDidnt.Join> onDDJoin(
         ActorRef<Msg> root,
-        State s,
+        ImmutableIntObjectMap<ActorRef<Node.Cmd>> key2node,
         int k
     ) {
 
-        record OnDDJoin(ActorRef<Msg> root, State s, int k) {}
+        record OnDDJoin(ActorRef<Msg> root, ImmutableIntObjectMap<ActorRef<Node.Cmd>> key2node, int k) {}
 
-        return Behaviors.receive((ctx, msg) -> Logging.logging(ctx.getLog(), new OnDDJoin(root, s, k), msg, MBehaviors.stopped(() ->
+        return Behaviors.receive((ctx, msg) -> Logging.logging(ctx.getLog(), new OnDDJoin(root, key2node, k), msg, MBehaviors.stopped(() ->
             root.tell(new Resume(switch (msg) {
 
-                case DidOrDidnt.Join.Did x -> new State(s.key2node().newWithKeyValue(k, x.who()));
+                case DidOrDidnt.Join.Did x -> key2node.newWithKeyValue(k, x.who());
 
-                case DidOrDidnt.Join.Didnt ignored -> s;
+                case DidOrDidnt.Join.Didnt ignored -> key2node;
 
             }))
         )));
@@ -266,24 +262,24 @@ public interface Root {
 
     private static Behavior<DidOrDidnt.Leave> onDDLeave(
         ActorRef<Msg> root,
-        State s,
+        ImmutableIntObjectMap<ActorRef<Node.Cmd>> key2node,
         int k,
         ActorRef<Node.Cmd> who
     ) {
 
-        record OnDDLeave(ActorRef<Msg> root, State s, int k, ActorRef<Node.Cmd> who) {}
+        record OnDDLeave(ActorRef<Msg> root, ImmutableIntObjectMap<ActorRef<Node.Cmd>> key2node, int k, ActorRef<Node.Cmd> who) {}
 
         return Behaviors.withTimers(timer -> Behaviors.setup(ctx -> {
 
             timer.startSingleTimer(new DidOrDidnt.Leave.Didnt(new TimeoutException()), Duration.ofSeconds(2L));
             ctx.watchWith(who, new DidOrDidnt.Leave.Did());
 
-            return Behaviors.receiveMessage(msg -> Logging.logging(ctx.getLog(), new OnDDLeave(root, s, k, who), msg, MBehaviors.stopped(() ->
+            return Behaviors.receiveMessage(msg -> Logging.logging(ctx.getLog(), new OnDDLeave(root, key2node, k, who), msg, MBehaviors.stopped(() ->
                 root.tell(new Resume(switch (msg) {
 
-                    case DidOrDidnt.Leave.Did ignored -> new State(s.key2node().newWithoutKey(k));
+                    case DidOrDidnt.Leave.Did ignored -> key2node.newWithoutKey(k);
 
-                    case DidOrDidnt.Leave.Didnt ignored -> s;
+                    case DidOrDidnt.Leave.Didnt ignored -> key2node;
 
                 }))
             )));
@@ -293,47 +289,47 @@ public interface Root {
 
     private static Behavior<DidOrDidnt.Recover> onDDRecover(
         ActorRef<Msg> root,
-        State s
+        ImmutableIntObjectMap<ActorRef<Node.Cmd>> key2node
     ) {
 
-        record OnDDRecover(ActorRef<Msg> root, State s) {}
+        record OnDDRecover(ActorRef<Msg> root, ImmutableIntObjectMap<ActorRef<Node.Cmd>> key2node) {}
 
-        return Behaviors.receive((ctx, msg) -> Logging.logging(ctx.getLog(), new OnDDRecover(root, s), msg, MBehaviors.stopped(() -> root.tell(new Resume(s)))));
+        return Behaviors.receive((ctx, msg) -> Logging.logging(ctx.getLog(), new OnDDRecover(root, key2node), msg, MBehaviors.stopped(() -> root.tell(new Resume(key2node)))));
     }
 
     private static Behavior<Void> tillTerminated(
         ActorRef<Msg> root,
-        State s,
+        ImmutableIntObjectMap<ActorRef<Node.Cmd>> key2node,
         ImmutableSet<ActorRef<Void>> refs
     ) {
 
-        record TillTerminated(ActorRef<Msg> root, State s, ImmutableSet<ActorRef<Void>> refs) {}
+        record TillTerminated(ActorRef<Msg> root, ImmutableIntObjectMap<ActorRef<Node.Cmd>> key2node, ImmutableSet<ActorRef<Void>> refs) {}
 
         return Behaviors.setup(ctx -> {
             refs.forEach(ctx::watch);
-            return Logging.logging(ctx.getLog(), new TillTerminated(root, s, refs), monotonically(root, s, refs));
+            return Logging.logging(ctx.getLog(), new TillTerminated(root, key2node, refs), monotonically(root, key2node, refs));
         });
     }
 
     private static MBehavior<Void> monotonically(
         ActorRef<Msg> root,
-        State s,
+        ImmutableIntObjectMap<ActorRef<Node.Cmd>> key2node,
         ImmutableSet<ActorRef<Void>> refs
     ) {
 
-        record Monotonically(ActorRef<Msg> root, State s, ImmutableSet<ActorRef<Void>> refs) {}
+        record Monotonically(ActorRef<Msg> root, ImmutableIntObjectMap<ActorRef<Node.Cmd>> key2node, ImmutableSet<ActorRef<Void>> refs) {}
 
         return refs.isEmpty()
-            ? MBehaviors.stopped(() -> root.tell(new Resume(s)))
-            : new MBehavior<>(new Monotonically(root, s, refs), Behaviors.setup(ctx -> Behaviors.receive(Void.class)
-            .onSignal(Terminated.class, t -> Logging.logging(ctx.getLog(), new Monotonically(root, s, refs), t, monotonically(root, s, refs.newWithout(t.getRef()))))
+            ? MBehaviors.stopped(() -> root.tell(new Resume(key2node)))
+            : new MBehavior<>(new Monotonically(root, key2node, refs), Behaviors.setup(ctx -> Behaviors.receive(Void.class)
+            .onSignal(Terminated.class, t -> Logging.logging(ctx.getLog(), new Monotonically(root, key2node, refs), t, monotonically(root, key2node, refs.newWithout(t.getRef()))))
             .build()));
     }
 
-    private static Client.GetOrPut convert(State s, GetOrPut gp) {
+    static Client.GetOrPut convert(ImmutableIntObjectMap<ActorRef<Node.Cmd>> key2node, GetOrPut gp) {
         return switch (gp) {
-            case GetOrPut.Get get -> new Client.Get(s.key2node().get(get.who()).narrow(), get.k());
-            case GetOrPut.Put put -> new Client.Put(s.key2node().get(put.who()).narrow(), put.k(), put.value());
+            case GetOrPut.Get get -> new Client.Get(key2node.get(get.who()).narrow(), get.k());
+            case GetOrPut.Put put -> new Client.Put(key2node.get(put.who()).narrow(), put.k(), put.value());
         };
     }
 
