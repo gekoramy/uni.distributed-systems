@@ -15,6 +15,7 @@ import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
 import static org.eclipse.collections.impl.collector.Collectors2.toImmutableList;
+import static org.eclipse.collections.impl.tuple.Tuples.pair;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.DynamicTest.dynamicTest;
@@ -36,28 +37,28 @@ class NodeTest {
             dynamicTest(
                 "w/ key = 1",
                 () -> assertEquals(
-                    Lists.immutable.with("1", "2", "3", "4"),
+                    Lists.immutable.with(pair(1, "1"), pair(2, "2"), pair(3, "3"), pair(4, "4")),
                     Node.clockwise(key2value, 1)
                 )
             ),
             dynamicTest(
                 "w/ key = 3",
                 () -> assertEquals(
-                    Lists.immutable.with("3", "4", "1", "2"),
+                    Lists.immutable.with(pair(3, "3"), pair(4, "4"), pair(1, "1"), pair(2, "2")),
                     Node.clockwise(key2value, 3)
                 )
             ),
             dynamicTest(
                 "w/ key > maximum",
                 () -> assertEquals(
-                    Lists.immutable.with("1", "2", "3", "4"),
+                    Lists.immutable.with(pair(1, "1"), pair(2, "2"), pair(3, "3"), pair(4, "4")),
                     Node.clockwise(key2value, 5)
                 )
             ),
             dynamicTest(
                 "w/ key < minimum",
                 () -> assertEquals(
-                    Lists.immutable.with("1", "2", "3", "4"),
+                    Lists.immutable.with(pair(1, "1"), pair(2, "2"), pair(3, "3"), pair(4, "4")),
                     Node.clockwise(key2value, 0)
                 )
             ),
@@ -71,7 +72,7 @@ class NodeTest {
             dynamicTest(
                 "w/ singleton key2node, always the same",
                 () -> IntStream.range(0, 1_0000).forEach(key -> assertEquals(
-                    Lists.immutable.with("0"),
+                    Lists.immutable.with(pair(0, "0")),
                     Node.clockwise(Maps.immutable.with(0, "0"), key)
                 ))
             )
