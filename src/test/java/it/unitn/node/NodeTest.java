@@ -15,12 +15,72 @@ import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
 import static org.eclipse.collections.impl.collector.Collectors2.toImmutableList;
+import static org.eclipse.collections.impl.collector.Collectors2.toImmutableSortedMap;
 import static org.eclipse.collections.impl.tuple.Tuples.pair;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.DynamicTest.dynamicTest;
 
 class NodeTest {
+
+    @TestFactory
+    Stream<DynamicTest> stakeholdersByPriority() {
+
+        final var key2nodes =
+            IntStream.range(1, 10)
+                .boxed()
+                .collect(toImmutableSortedMap(k -> k, String::valueOf));
+
+        return Stream.of(
+            dynamicTest(
+                "it contains N distinct elements",
+                () -> IntStream.range(1, 10)
+                    .mapToObj(N -> new Config(N, 0, 0, Duration.ZERO))
+                    .forEach(c -> {
+                        assertEquals(
+                            c.N(),
+                            Node.stakeholdersByPriority(c, 4, key2nodes, 5).size()
+                        );
+                        assertEquals(
+                            c.N(),
+                            Node.stakeholdersByPriority(c, 4, key2nodes, 5).toSet().size()
+                        );
+                    })
+            ),
+            dynamicTest(
+                "if it lists 'priority', it lists it in 1st position",
+                () -> {
+                    final var actor = key2nodes.get(4);
+
+                    IntStream.range(1, 10)
+                        .mapToObj(N -> new Config(N, 0, 0, Duration.ZERO))
+                        .forEach(c -> {
+                            final var premise =
+                                key2nodes.keysView()
+                                    .collect(key -> Node.stakeholdersByPriority(c, 4, key2nodes, key))
+                                    .select(xs -> xs.contains(actor));
+
+                            assertFalse(premise.isEmpty());
+                            premise.forEach(xs -> assertEquals(actor, xs.getFirst()));
+                        });
+                }
+            ),
+            dynamicTest(
+                "priority parameter changes only the order",
+                () -> IntStream.range(1, 10)
+                    .mapToObj(N -> new Config(N, 0, 0, Duration.ZERO))
+                    .forEach(c -> key2nodes.keysView().forEach(key -> {
+
+                        final var xss = key2nodes.keysView()
+                            .collect(node -> Node.stakeholdersByPriority(c, node, key2nodes, key))
+                            .collect(RichIterable::toImmutableSortedList)
+                            .toImmutableList();
+
+                        xss.forEach(xs -> assertEquals(xss.getFirst(), xs));
+
+                    }))
+            )
+        );
+    }
 
     @TestFactory
     Stream<DynamicTest> clockwise() {

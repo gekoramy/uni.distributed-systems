@@ -33,6 +33,7 @@ import java.util.stream.Stream;
 
 import static it.unitn.utils.Comparing.cmp;
 import static it.unitn.utils.Extracting.extract;
+import static it.unitn.utils.Shuffling.shuffle;
 import static it.unitn.utils.Windowing.windowed;
 import static java.util.stream.Collectors.collectingAndThen;
 import static org.eclipse.collections.impl.collector.Collectors2.toImmutableList;
@@ -589,15 +590,21 @@ public interface Node {
             : redundant(newState);
     }
 
-    static <K extends Comparable<K>, V> ImmutableList<V> clockwise(ImmutableMapIterable<K, V> key2value, K key) {
+    static <V> ImmutableList<V> stakeholdersByPriority(Config config, int priority, ImmutableSortedMap<Integer, V> key2value, int key) {
+        final var partition = Node.clockwise(key2value, key).take(config.N()).partition(entry -> entry.getOne() == priority);
+        return Lists.immutable.with(partition.getSelected(), shuffle(partition.getRejected(), priority))
+            .flatCollect(x -> x)
+            .collect(Pair::getTwo);
+    }
+
+    static <K extends Comparable<K>, V> ImmutableList<Pair<K, V>> clockwise(ImmutableMapIterable<K, V> key2value, K key) {
 
         final var partition = key2value
             .keyValuesView()
             .partition(x -> x.getOne().compareTo(key) >= 0);
 
         return Lists.immutable.with(partition.getSelected(), partition.getRejected())
-            .flatCollect(x -> x)
-            .collect(Pair::getTwo);
+            .flatCollect(x -> x);
     }
 
     static Stream<Range> ranges(Config config, ImmutableSortedSet<Integer> keys) {

@@ -15,7 +15,7 @@ import org.eclipse.collections.api.map.sorted.ImmutableSortedMap;
 import java.util.concurrent.TimeoutException;
 
 import static it.unitn.node.Node.DEFAULT;
-import static it.unitn.utils.Shuffling.shuffle;
+import static it.unitn.node.Node.stakeholdersByPriority;
 
 public interface Reading {
 
@@ -33,7 +33,7 @@ public interface Reading {
         ImmutableSortedMap<Integer, ActorRef<Node.Cmd>> key2node
     ) {
 
-        final var toAsk = shuffle(Node.clockwise(key2node, key).take(config.N()), node);
+        final var toAsk = stakeholdersByPriority(config, node, key2node, key);
 
         record Init(ActorRef<DidOrDidnt.Get> replyTo, Config config, int key, ImmutableSortedMap<Integer, ActorRef<Node.Cmd>> key2node, ImmutableList<ActorRef<Node.Cmd>> toAsk) {}
 
