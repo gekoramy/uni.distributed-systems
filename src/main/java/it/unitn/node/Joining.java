@@ -64,7 +64,7 @@ public interface Joining {
 
                 case Res4key2node x -> precollecting(parent, x.config, node, x.key2node());
 
-                case Res4key2word ignored -> throw new AssertionError("Res4key2node only");
+                case Res4key2word ignored -> throw new AssertionError("%s only".formatted(Res4key2word.class));
 
             }));
         });
