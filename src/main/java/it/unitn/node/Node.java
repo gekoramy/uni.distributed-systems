@@ -62,7 +62,7 @@ public interface Node {
 
     sealed interface Common {}
 
-    record Setup(Config config, ImmutableIntObjectMap<ActorRef<Cmd>> key2node) implements Cmd {}
+    record Setup(ActorRef<DidOrDidnt.Setup.Did> replyTo, Config config, ImmutableIntObjectMap<ActorRef<Cmd>> key2node) implements Cmd {}
 
     record Ask4key2node(ActorRef<Joining.Res4key2node> replyTo) implements Cmd, Common {}
 
@@ -123,8 +123,14 @@ public interface Node {
 
                 yield switch (cmp(x.key2node().size(), x.config().N())) {
                     case LT -> throw new AssertionError("|key2node| >= N");
-                    case EQ -> minimal(s);
-                    case GT -> redundant(s);
+                    case EQ -> {
+                        x.replyTo().tell(new DidOrDidnt.Setup.Did(node));
+                        yield minimal(s);
+                    }
+                    case GT -> {
+                        x.replyTo().tell(new DidOrDidnt.Setup.Did(node));
+                        yield redundant(s);
+                    }
                 };
             }
 

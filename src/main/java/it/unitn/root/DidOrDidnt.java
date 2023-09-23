@@ -7,6 +7,12 @@ import java.math.BigInteger;
 
 public interface DidOrDidnt {
 
+    sealed interface Setup {
+
+        record Did(int who) implements Setup {}
+
+    }
+
     sealed interface Join {
 
         record Did(ActorRef<Node.Cmd> who) implements Join {}

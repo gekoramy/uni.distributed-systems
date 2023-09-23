@@ -69,9 +69,10 @@ interface RootImpl {
                     (acc, k) -> acc.newWithKeyValue(k, ctx.spawn(newbie(k).narrow(), Integer.toString(k)))
                 );
 
-            key2node.forEach(ref -> ref.tell(new Node.Setup(config, key2node)));
+            final var task = ctx.spawnAnonymous(onDDSetup(ctx.getSelf(), key2node, keys).behavior());
+            key2node.forEach(ref -> ref.tell(new Node.Setup(task, config, key2node)));
 
-            return Logging.logging(ctx.getLog(), new Init(config, keys), RootImpl.available(key2node, onDDJoin, onDDLeave, onDDRecover, tillTerminated));
+            return Logging.logging(ctx.getLog(), new Init(config, keys), RootImpl.blocked((k2n) -> available(k2n, onDDJoin, onDDLeave, onDDRecover, tillTerminated)));
 
         });
     }
@@ -231,6 +232,25 @@ interface RootImpl {
                     }
 
                 }))
+        );
+    }
+
+    static MBehavior<DidOrDidnt.Setup.Did> onDDSetup(
+        ActorRef<Root.Msg> root,
+        ImmutableIntObjectMap<ActorRef<Node.Cmd>> key2node,
+        ImmutableIntSet keys
+    ) {
+
+        record OnDDSetup(ActorRef<Root.Msg> root, ImmutableIntObjectMap<ActorRef<Node.Cmd>> key2node, ImmutableIntSet keys) {}
+
+        if (keys.isEmpty())
+            return MBehaviors.stopped(() -> root.tell(new Root.Resume(key2node)));
+
+        return new MBehavior<>(
+            new OnDDSetup(root, key2node, keys),
+            Behaviors.receive((ctx, msg) -> Logging.logging(ctx.getLog(), new OnDDSetup(root, key2node, keys), msg,
+                onDDSetup(root, key2node, keys.newWithout(msg.who()))
+            ))
         );
     }
 
