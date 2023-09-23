@@ -371,12 +371,16 @@ public interface Node {
                     final var node2ref = lock.getOne();
                     final var queue = lock.getTwo();
 
-                    final var original = x.word().version().subtract(BigInteger.valueOf(x.node()));
+                    if (node2ref.keysView().max() == x.node()) {
+                        // treat smaller ones as if they happened before
+                        final var original = x.word().version().subtract(BigInteger.valueOf(x.node()));
 
-                    // treat smaller ones as if they happened before
-                    node2ref.keyValuesView()
-                        .select(p -> p.getOne() < x.node())
-                        .forEach(p -> p.getTwo().tell(new Writing.Skip(original.add(BigInteger.valueOf(p.getOne())))));
+                        node2ref.keyValuesView()
+                            .forEach(p -> p.getTwo().tell(new Writing.DidWrite(
+                                original.add(BigInteger.valueOf(p.getOne())),
+                                s.node()
+                            )));
+                    }
 
                     // it is safe to reply to RD
                     queue.forEach(ref -> ref.tell(new Reading.DidRead(x.word())));

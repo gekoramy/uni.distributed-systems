@@ -10,8 +10,10 @@ import it.unitn.utils.Logging;
 import it.unitn.utils.MBehavior;
 import it.unitn.utils.MBehaviors;
 import org.eclipse.collections.api.factory.Lists;
+import org.eclipse.collections.api.factory.primitive.IntSets;
 import org.eclipse.collections.api.list.ImmutableList;
 import org.eclipse.collections.api.map.sorted.ImmutableSortedMap;
+import org.eclipse.collections.api.set.primitive.ImmutableIntSet;
 
 import java.math.BigInteger;
 import java.util.Optional;
@@ -30,7 +32,7 @@ public interface Writing {
 
     record Ack(ActorRef<Node.Write> replyTo, BigInteger version) implements Cmd {}
 
-    record Skip(BigInteger version) implements Cmd {}
+    record DidWrite(BigInteger version, int replica) implements Cmd {}
 
     record Failed(Throwable cause) implements Event {}
 
@@ -102,12 +104,10 @@ public interface Writing {
     ) {
 
         if (locked.size() == config.W()) {
-            return MBehaviors.stopped(() -> {
-                final var v = version.add(BigInteger.valueOf(node));
-                locked.forEach(ref -> ref.tell(new Node.Write(node, key, new Node.Word(value, v))));
-                toUnlock.forEach(ref -> ref.tell(new Node.Unlock(key, node)));
-                replyTo.tell(new DidOrDidnt.Put.Did(v));
-            });
+            final var v = version.add(BigInteger.valueOf(node));
+            locked.forEach(ref -> ref.tell(new Node.Write(node, key, new Node.Word(value, v))));
+            replyTo.tell(new DidOrDidnt.Put.Did(v));
+            return delaying(node, key, toUnlock, config.W(), IntSets.immutable.empty());
         }
 
         record Collecting(int node, int key, Optional<String> value, ImmutableList<ActorRef<Node.Cmd>> toUnlock, ImmutableList<ActorRef<Node.Write>> locked, BigInteger version) {}
@@ -118,16 +118,43 @@ public interface Writing {
             state,
             Behaviors.receive((ctx, msg) -> Logging.logging(ctx.getLog(), state, msg, switch (msg) {
                 case Ack x -> collecting(replyTo, config, node, key, value, toUnlock, locked.newWith(x.replyTo()), version.max(x.version()));
-                case Skip x -> MBehaviors.stopped(() -> {
-                    toUnlock.forEach(ref -> ref.tell(new Node.Unlock(key, node)));
+                case DidWrite x -> {
                     replyTo.tell(new DidOrDidnt.Put.Did(x.version()));
-                });
+                    yield delaying(node, key, toUnlock, config.W(), IntSets.immutable.of(x.replica()));
+                }
                 case Failed x -> MBehaviors.stopped(() -> {
                     toUnlock.forEach(ref -> ref.tell(new Node.Unlock(key, node)));
                     replyTo.tell(new DidOrDidnt.Put.Didnt(x.cause()));
                 });
             }))
         );
+    }
+
+    private static MBehavior<Msg> delaying(
+        int node,
+        int key,
+        ImmutableList<ActorRef<Node.Cmd>> toUnlock,
+        int many,
+        ImmutableIntSet seen
+    ) {
+
+        if (many == seen.size()) {
+            return MBehaviors.stopped(() -> toUnlock.forEach(ref -> ref.tell(new Node.Unlock(key, node))));
+        }
+
+        record Delaying(int node, int key, ImmutableList<ActorRef<Node.Cmd>> toUnlock, int many, ImmutableIntSet seen) {}
+
+        final var state = new Delaying(node, key, toUnlock, many, seen);
+
+        return new MBehavior<>(
+            state,
+            Behaviors.receive((ctx, msg) -> Logging.logging(ctx.getLog(), state, msg, switch (msg) {
+
+                case DidWrite x -> delaying(node, key, toUnlock, many, seen.newWith(x.replica()));
+
+                default -> delaying(node, key, toUnlock, many, seen);
+
+            })));
     }
 
 }
