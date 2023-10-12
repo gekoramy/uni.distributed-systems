@@ -58,8 +58,8 @@ interface RootImpl {
         if (config.T().isNegative() || config.T().isZero())
             throw new AssertionError("T > 0");
 
-        if (keys.anySatisfy(k -> k <= 0))
-            throw new AssertionError("keys > 0");
+        if (keys.anySatisfy(k -> k < 0))
+            throw new AssertionError("keys >= 0");
 
         return Behaviors.setup(ctx -> {
 
