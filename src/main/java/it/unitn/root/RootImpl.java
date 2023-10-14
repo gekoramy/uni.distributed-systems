@@ -49,8 +49,8 @@ interface RootImpl {
         if (config.N() < config.W())
             throw new AssertionError("N >= W");
 
-        if (config.N() / 2 >= config.W())
-            throw new AssertionError("N/2 < W");
+        if (config.N() >= 2 * config.W())
+            throw new AssertionError("N < 2 * W");
 
         if (config.N() >= config.R() + config.W())
             throw new AssertionError("N < R + W");
