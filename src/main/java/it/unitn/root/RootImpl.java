@@ -43,6 +43,15 @@ interface RootImpl {
         if (keys.size() < config.N())
             throw new AssertionError("|key2node| >= N");
 
+        if (config.N() <= 0)
+            throw new AssertionError("N > 0");
+
+        if (config.R() <= 0)
+            throw new AssertionError("R > 0");
+
+        if (config.W() <= 0)
+            throw new AssertionError("W > 0");
+
         if (config.N() < config.R())
             throw new AssertionError("N >= R");
 
