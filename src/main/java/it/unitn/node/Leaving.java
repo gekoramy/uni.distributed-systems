@@ -22,6 +22,11 @@ import static it.unitn.node.Node.ranges;
 import static it.unitn.utils.Extracting.extract;
 import static org.eclipse.collections.impl.collector.Collectors2.toImmutableList;
 
+/**
+ * {@link Leaving} actor ensures that the parent node leaves the network in a consistent state.
+ * <br>
+ * It will inform the parent node with one of [{@link Node.DidLeave}, {@link Node.DidntLeave}].
+ */
 public interface Leaving {
 
     sealed interface Msg {}

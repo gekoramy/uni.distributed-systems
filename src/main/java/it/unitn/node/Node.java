@@ -40,6 +40,17 @@ import static java.util.stream.Collectors.collectingAndThen;
 import static org.eclipse.collections.impl.collector.Collectors2.toImmutableList;
 import static org.eclipse.collections.impl.collector.Collectors2.toImmutableSortedMap;
 
+/**
+ * {@link Node} actor is responsible for all the protocol operations.
+ * <br>
+ * Whenever it can, it delegates the operations to on-demand children:
+ * <ul>
+ *     <li>{@link Joining}</li>
+ *     <li>{@link Leaving}</li>
+ *     <li>{@link Reading}</li>
+ *     <li>{@link Writing}</li>
+ * </ul>
+ */
 public interface Node {
 
     Word DEFAULT = new Word(Optional.empty(), BigInteger.ZERO);
@@ -588,6 +599,18 @@ public interface Node {
     }
 
     static Stream<ImmutableList<Integer>> clusters(Config config, ImmutableSortedSet<Integer> keys) {
+
+        // N = 4
+        // 10 20 30 40 50
+
+        // [  N - 1  ]
+        // 20 30 40 50 10 20 30 40 50
+        //  (^^^^^^^^^^^]
+        //     (^^^^^^^^^^^]
+        //        (^^^^^^^^^^^]
+        //           (^^^^^^^^^^^]
+        //              (^^^^^^^^^^^]
+
         return Stream.of(
                 keys.drop(keys.size() - config.N()),
                 keys

@@ -14,6 +14,17 @@ import org.eclipse.collections.api.list.ImmutableList;
 import java.time.Duration;
 import java.util.Optional;
 
+/**
+ * {@link Client} actor performs a list of operations sequentially.
+ * <br>
+ * Where:
+ * <ul>
+ *     <li>the list of operations is defined once</li>
+ *     <li>an operation can be any between [{@link Get}, {@link Put}]</li>
+ *     <li>every operation has a static timeout</li>
+ * </ul>
+ * It delegates the operations to on-demand children.
+ */
 public interface Client {
 
     sealed interface GetOrPut {}

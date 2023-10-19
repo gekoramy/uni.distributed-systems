@@ -17,6 +17,11 @@ import java.util.concurrent.TimeoutException;
 import static it.unitn.node.Node.DEFAULT;
 import static it.unitn.node.Node.stakeholdersByPriority;
 
+/**
+ * {@link Reading} actor is responsible - on behalf of the coordinator {@link Node} - for the {@link Node.Get} operation.
+ * <br>
+ * It will directly inform the client with one of [{@link DidOrDidnt.Get.Did}, {@link DidOrDidnt.Get.Didnt}].
+ */
 public interface Reading {
 
     sealed interface Msg {}

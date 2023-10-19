@@ -9,6 +9,12 @@ import org.eclipse.collections.api.list.ImmutableList;
 import org.eclipse.collections.api.map.primitive.ImmutableIntObjectMap;
 import org.eclipse.collections.api.set.primitive.ImmutableIntSet;
 
+/**
+ * {@code Root} actor is the entry-point for interacting with the system.
+ * <br>
+ * It ensures that all its operations are sequentially performed.
+ * To do so, it delegates the post-operations procedures to on-demand children.
+ */
 public interface Root {
 
     sealed interface Msg {}

@@ -28,6 +28,11 @@ import static it.unitn.utils.Ranging.disjoint;
 import static it.unitn.utils.Windowing.windowed;
 import static org.eclipse.collections.impl.collector.Collectors2.toImmutableList;
 
+/**
+ * {@code Joining} actor ensures that the parent node joins the network [recovers] with up-to-date info.
+ * <br>
+ * It will inform the parent node with one of [{@link Node.DidJoin}, {@link Node.DidntJoin}, {@link Node.DidntJoinSafely}].
+ */
 public interface Joining {
 
     sealed interface Msg {}

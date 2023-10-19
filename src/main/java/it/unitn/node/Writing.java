@@ -19,6 +19,11 @@ import java.util.concurrent.TimeoutException;
 import static it.unitn.node.Node.DEFAULT;
 import static it.unitn.node.Node.stakeholdersByPriority;
 
+/**
+ * {@link Writing} actor is responsible - on behalf of the coordinator {@link Node} - for the {@link Node.Put} operation.
+ * <br>
+ * It will directly inform the client with one of [{@link DidOrDidnt.Put.Did}, {@link DidOrDidnt.Put.Didnt}].
+ */
 public interface Writing {
 
     sealed interface Msg {}
