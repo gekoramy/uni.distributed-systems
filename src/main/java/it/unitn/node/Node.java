@@ -542,10 +542,12 @@ public interface Node {
                     case DidLeave ignored -> MBehaviors.<Msg>stopped();
 
                     case DidntLeave x -> {
+
+                        // "leaving" behaviour is reachable only from "redundant" behaviour
+                        // thus, if I cannot leave, my fallback behaviour must be "redundant"
+
                         replyTo.tell(new DidOrDidnt.Leave.Didnt(x.cause()));
-                        yield s.key2node().size() == s.config().N()
-                            ? minimal(s)
-                            : redundant(s);
+                        yield redundant(s);
                     }
 
                     default -> throw new AssertionError("%s only".formatted(Lists.immutable.of(DidLeave.class, DidntLeave.class).collect(Class::getName)));
