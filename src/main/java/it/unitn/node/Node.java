@@ -285,7 +285,7 @@ public interface Node {
                     s.config(),
                     key2node,
                     extract(new TreeMap<>(s.key2word().castToSortedMap()), range.gt(), range.lte()),
-                    IntObjectMaps.immutable.empty()
+                    s.key2locks()
                 ));
             }
 
