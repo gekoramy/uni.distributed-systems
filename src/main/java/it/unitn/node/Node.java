@@ -495,17 +495,22 @@ public interface Node {
             Behaviors.receive((ctx, msg) -> Logging.logging(ctx.getLog(), state, msg, switch (msg) {
 
                 case DidRecover x -> {
+                    final var range = ranges(x.config(), SortedSets.immutable.withSortedSet(new TreeMap<>(x.key2node().castToSortedMap()).navigableKeySet()))
+                        .filter(p -> node == p.lte())
+                        .findAny()
+                        .orElseThrow();
+
                     replyTo.tell(new DidOrDidnt.Recover.Did());
 
                     final var newState = new State(
                         node,
                         x.config(),
                         x.key2node(),
-                        key2word,
+                        extract(new TreeMap<>(key2word.castToSortedMap()), range.gt(), range.lte()),
                         IntObjectMaps.immutable.empty()
                     );
 
-                    yield newState.key2node().size() == x.config().N()
+                    yield newState.key2node().size() == newState.config().N()
                         ? minimal(newState)
                         : redundant(newState);
                 }
