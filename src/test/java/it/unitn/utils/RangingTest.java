@@ -29,7 +29,7 @@ class RangingTest {
                     new Test(new Range(7, 3), new Range(3, 4), true),
                     new Test(new Range(7, 3), new Range(3, 9), false)
                 )
-                .map(x -> named("%s %s : %s".formatted(x.a(), x.b(), x.expected()), x));
+                .map(x -> named("%s %s → %s".formatted(x.a(), x.b(), x.expected()), x));
 
         return Stream.concat(
             stream(

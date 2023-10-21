@@ -31,14 +31,14 @@ class NodeTest {
     Stream<DynamicTest> grant() {
         return Stream.of(
             dynamicTest(
-                "[] -> ([], [])",
+                "[] → ([], [])",
                 () -> assertEquals(
                     Tuples.pair(SortedMaps.immutable.empty(), Lists.immutable.empty()),
                     Node.grant(Lists.immutable.<IntObjectPair<Object>>empty(), IntObjectPair::getOne, IntObjectPair::getTwo)
                 )
             ),
             dynamicTest(
-                "[1, 2, 3, 4, 5] -> ([1, 2, 3, 4, 5], [])",
+                "[1, 2, 3, 4, 5] → ([1, 2, 3, 4, 5], [])",
                 () -> {
                     final var xs = Lists.immutable.with(
                         PrimitiveTuples.pair(1, new Object()),
@@ -58,7 +58,7 @@ class NodeTest {
                 }
             ),
             dynamicTest(
-                "[1, 1, 2, 2] -> ([1, 2], [1, 2])",
+                "[1, 1, 2, 2] → ([1, 2], [1, 2])",
                 () -> {
                     final var xs = Lists.immutable.with(
                         PrimitiveTuples.pair(1, new Object()),
@@ -77,7 +77,7 @@ class NodeTest {
                 }
             ),
             dynamicTest(
-                "[5, 4, 3, 2, 1] -> ([5], [4, 3, 2, 1])",
+                "[5, 4, 3, 2, 1] → ([5], [4, 3, 2, 1])",
                 () -> {
                     final var xs = Lists.immutable.with(
                         PrimitiveTuples.pair(5, new Object()),
@@ -97,7 +97,7 @@ class NodeTest {
                 }
             ),
             dynamicTest(
-                "[1, 3, 2, 5, 4] -> ([1, 3, 5], [2, 4])",
+                "[1, 3, 2, 5, 4] → ([1, 3, 5], [2, 4])",
                 () -> {
                     final var xs = Lists.immutable.with(
                         PrimitiveTuples.pair(1, new Object()),
