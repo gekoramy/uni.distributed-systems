@@ -146,7 +146,7 @@ public interface Node {
                 };
             }
 
-            default -> throw new AssertionError("%s only".formatted(Setup.class.getName()));
+            default -> throw new AssertionError("%s only".formatted(Setup.class));
 
         }));
     }
@@ -546,7 +546,7 @@ public interface Node {
                         yield redundant(s);
                     }
 
-                    default -> throw new AssertionError("%s only".formatted(Lists.immutable.of(DidLeave.class, DidntLeave.class).collect(Class::getName)));
+                    default -> throw new AssertionError("%s only".formatted(Lists.immutable.of(DidLeave.class, DidntLeave.class)));
 
                 }));
             })
