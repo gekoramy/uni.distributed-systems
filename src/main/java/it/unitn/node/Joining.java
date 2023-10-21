@@ -29,9 +29,9 @@ import static it.unitn.utils.Windowing.windowed;
 import static org.eclipse.collections.impl.collector.Collectors2.toImmutableList;
 
 /**
- * {@code Joining} actor ensures that the parent node joins the network [recovers] with up-to-date info.
+ * {@code Joining} actor ensures that the parent node joins the network with up-to-date info.
  * <br>
- * It will inform the parent node with one of [{@link Node.DidJoin}, {@link Node.DidntJoin}, {@link Node.DidntJoinSafely}].
+ * It will inform the parent node with one of [{@link Node.DidJoin}, {@link Node.DidntJoin}].
  */
 public interface Joining {
 
@@ -59,7 +59,7 @@ public interface Joining {
                 Res4key2node.class,
                 ref,
                 Duration.ofSeconds(1L),
-                Node.Ask4key2node::new,
+                ignore -> new Node.Ask4key2node(ctx.messageAdapter(Node.Res4key2node.class, r -> new Res4key2node(r.config(), r.key2node()))),
                 (r, t) -> r != null ? r : new Failed(t)
             );
 
@@ -238,7 +238,7 @@ public interface Joining {
             state,
             Behaviors.receive((ctx, msg) -> Logging.logging(ctx.getLog(), state, msg, switch (msg) {
 
-                case Failed x -> MBehaviors.stopped(() -> parent.tell(new Node.DidntJoinSafely(x.cause(), config, key2node, key2word.toImmutable())));
+                case Failed x -> MBehaviors.stopped(() -> parent.tell(new Node.DidntJoin(x.cause())));
 
                 case Res4key2node ignored -> throw new AssertionError("%s only".formatted(Res4key2word.class));
 

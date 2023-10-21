@@ -75,7 +75,9 @@ public interface Node {
 
     record Setup(ActorRef<DidOrDidnt.Setup.Did> replyTo, Config config, ImmutableIntObjectMap<ActorRef<Cmd>> key2node) implements Cmd {}
 
-    record Ask4key2node(ActorRef<Joining.Res4key2node> replyTo) implements Cmd, Common {}
+    record Ask4key2node(ActorRef<Res4key2node> replyTo) implements Cmd, Common {}
+
+    record Res4key2node(Config config, ImmutableSortedMap<Integer, ActorRef<Node.Cmd>> key2node) {}
 
     record Ask4key2word(ActorRef<Joining.Res4key2word> replyTo, int gt, int lte) implements Cmd, Common {}
 
@@ -89,8 +91,6 @@ public interface Node {
 
     record DidntJoin(Throwable cause) implements Event {}
 
-    record DidntJoinSafely(Throwable cause, Config config, ImmutableSortedMap<Integer, ActorRef<Cmd>> key2node, ImmutableSortedMap<Integer, Word> key2word) implements Event {}
-
     record Announce(int node, ActorRef<Cmd> ref) implements Cmd, Common {}
 
     record Ping(ActorRef<Leaving.Ack> replyTo) implements Cmd {}
@@ -100,6 +100,10 @@ public interface Node {
     record DidLeave() implements Event {}
 
     record DidntLeave(Throwable cause) implements Event {}
+
+    record DidRecover(Config config, ImmutableSortedMap<Integer, ActorRef<Cmd>> key2node) implements Event {}
+
+    record DidntRecover(Throwable cause) implements Event {}
 
     record Get(ActorRef<DidOrDidnt.Get> replyTo, int k) implements Cmd, Common {}
 
@@ -175,9 +179,7 @@ public interface Node {
 
                 case DidntJoin x -> MBehaviors.<Msg>stopped(() -> replyTo.tell(new DidOrDidnt.Join.Didnt(x.cause())));
 
-                case DidntJoinSafely x -> MBehaviors.<Msg>stopped(() -> replyTo.tell(new DidOrDidnt.Join.Didnt(x.cause())));
-
-                default -> throw new AssertionError("%s only".formatted(Lists.immutable.of(DidJoin.class, DidntJoin.class, DidntJoinSafely.class).collect(Class::getName)));
+                default -> throw new AssertionError("%s only".formatted(Lists.immutable.of(DidJoin.class, DidntJoin.class)));
 
             }));
 
@@ -263,7 +265,7 @@ public interface Node {
         return switch (msg) {
 
             case Ask4key2node x -> {
-                x.replyTo().tell(new Joining.Res4key2node(s.config(), s.key2node()));
+                x.replyTo().tell(new Res4key2node(s.config(), s.key2node()));
                 yield same.apply(s);
             }
 
@@ -466,32 +468,19 @@ public interface Node {
             state,
             Behaviors.receive((ctx, msg) -> Logging.logging(ctx.getLog(), state, msg, switch (msg) {
 
-                case Recover x -> prerecovering(x.replyTo(), node, x.ref(), key2word);
+                case Recover x when Objects.equals(x.ref(), ctx.getSelf()) -> {
+                    x.replyTo().tell(new DidOrDidnt.Recover.Didnt(new AssertionError("cannot recover w/ myself...")));
+                    yield crashed(node, key2word);
+                }
+
+                case Recover x -> {
+                    ctx.spawn(Recovering.init(ctx.getSelf().narrow(), node, x.ref().narrow()), "recovering");
+                    yield recovering(x.replyTo(), node, key2word);
+                }
 
                 default -> crashed(node, key2word);
 
             }))
-        );
-    }
-
-    private static MBehavior<Msg> prerecovering(ActorRef<DidOrDidnt.Recover> replyTo, int node, ActorRef<Cmd> ref, ImmutableSortedMap<Integer, Word> key2word) {
-
-        record PreRecovering(ActorRef<DidOrDidnt.Recover> replyTo, int node, ActorRef<Cmd> ref, ImmutableSortedMap<Integer, Word> key2word) {}
-
-        final var state = new PreRecovering(replyTo, node, ref, key2word);
-
-        return new MBehavior<>(
-            state,
-            Behaviors.setup(ctx -> {
-
-                if (Objects.equals(ref, ctx.getSelf()))
-                    throw new AssertionError("cannot recover w/ myself...");
-
-                ctx.spawn(Joining.init(ctx.getSelf().narrow(), node, ref.narrow()), "recovering");
-
-                return Logging.logging(ctx.getLog(), state, recovering(replyTo, node, key2word));
-
-            })
         );
     }
 
@@ -505,21 +494,28 @@ public interface Node {
             state,
             Behaviors.receive((ctx, msg) -> Logging.logging(ctx.getLog(), state, msg, switch (msg) {
 
-                case DidJoin x -> recover(replyTo, node, x.config(), x.key2node(), x.key2word());
+                case DidRecover x -> {
+                    replyTo.tell(new DidOrDidnt.Recover.Did());
 
-                case DidntJoinSafely x -> recover(replyTo, node, x.config(), x.key2node(), x.key2word());
+                    final var newState = new State(
+                        node,
+                        x.config(),
+                        x.key2node(),
+                        key2word,
+                        IntObjectMaps.immutable.empty()
+                    );
 
-                case DidntJoin x -> {
+                    yield newState.key2node().size() == x.config().N()
+                        ? minimal(newState)
+                        : redundant(newState);
+                }
+
+                case DidntRecover x -> {
                     replyTo.tell(new DidOrDidnt.Recover.Didnt(x.cause()));
                     yield crashed(node, key2word);
                 }
 
-                case Ask4key2word x -> {
-                    x.replyTo().tell(new Joining.Res4key2word(node, extract(new TreeMap<>(key2word.castToSortedMap()), x.gt(), x.lte())));
-                    yield recovering(replyTo, node, key2word);
-                }
-
-                default -> throw new AssertionError("%s only".formatted(Lists.immutable.of(DidJoin.class, DidntJoin.class, DidntJoinSafely.class, Ask4key2node.class).collect(Class::getName)));
+                default -> throw new AssertionError("%s only".formatted(Lists.immutable.of(DidRecover.class, DidntRecover.class)));
 
             }))
         );
@@ -555,28 +551,6 @@ public interface Node {
                 }));
             })
         );
-    }
-
-    private static MBehavior<Msg> recover(
-        ActorRef<DidOrDidnt.Recover> replyTo,
-        int node,
-        Config config,
-        ImmutableSortedMap<Integer, ActorRef<Cmd>> key2node,
-        ImmutableSortedMap<Integer, Word> words
-    ) {
-        replyTo.tell(new DidOrDidnt.Recover.Did());
-
-        final var newState = new State(
-            node,
-            config,
-            key2node,
-            words,
-            IntObjectMaps.immutable.empty()
-        );
-
-        return key2node.size() == config.N()
-            ? minimal(newState)
-            : redundant(newState);
     }
 
     static <V> ImmutableList<V> stakeholdersByPriority(Config config, int priority, ImmutableSortedMap<Integer, V> key2value, int key) {
