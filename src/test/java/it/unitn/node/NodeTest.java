@@ -4,9 +4,14 @@ import it.unitn.Config;
 import org.eclipse.collections.api.RichIterable;
 import org.eclipse.collections.api.factory.Lists;
 import org.eclipse.collections.api.factory.Maps;
+import org.eclipse.collections.api.factory.SortedMaps;
 import org.eclipse.collections.api.factory.SortedSets;
 import org.eclipse.collections.api.factory.primitive.IntSets;
 import org.eclipse.collections.api.list.ListIterable;
+import org.eclipse.collections.api.tuple.primitive.IntObjectPair;
+import org.eclipse.collections.impl.collector.Collectors2;
+import org.eclipse.collections.impl.tuple.Tuples;
+import org.eclipse.collections.impl.tuple.primitive.PrimitiveTuples;
 import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.TestFactory;
 
@@ -21,6 +26,98 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.DynamicTest.dynamicTest;
 
 class NodeTest {
+
+    @TestFactory
+    Stream<DynamicTest> grant() {
+        return Stream.of(
+            dynamicTest(
+                "[] -> ([], [])",
+                () -> assertEquals(
+                    Tuples.pair(SortedMaps.immutable.empty(), Lists.immutable.empty()),
+                    Node.grant(Lists.immutable.<IntObjectPair<Object>>empty(), IntObjectPair::getOne, IntObjectPair::getTwo)
+                )
+            ),
+            dynamicTest(
+                "[1, 2, 3, 4, 5] -> ([1, 2, 3, 4, 5], [])",
+                () -> {
+                    final var xs = Lists.immutable.with(
+                        PrimitiveTuples.pair(1, new Object()),
+                        PrimitiveTuples.pair(2, new Object()),
+                        PrimitiveTuples.pair(3, new Object()),
+                        PrimitiveTuples.pair(4, new Object()),
+                        PrimitiveTuples.pair(5, new Object())
+                    );
+
+                    assertEquals(
+                        Tuples.pair(
+                            xs.stream().collect(Collectors2.toImmutableSortedMap(IntObjectPair::getOne, IntObjectPair::getTwo)),
+                            Lists.immutable.empty()
+                        ),
+                        Node.grant(xs, IntObjectPair::getOne, IntObjectPair::getTwo)
+                    );
+                }
+            ),
+            dynamicTest(
+                "[1, 1, 2, 2] -> ([1, 2], [1, 2])",
+                () -> {
+                    final var xs = Lists.immutable.with(
+                        PrimitiveTuples.pair(1, new Object()),
+                        PrimitiveTuples.pair(1, new Object()),
+                        PrimitiveTuples.pair(2, new Object()),
+                        PrimitiveTuples.pair(2, new Object())
+                    );
+
+                    assertEquals(
+                        Tuples.pair(
+                            Stream.of(xs.get(0), xs.get(2)).collect(Collectors2.toImmutableSortedMap(IntObjectPair::getOne, IntObjectPair::getTwo)),
+                            Lists.immutable.with(xs.get(1), xs.get(3))
+                        ),
+                        Node.grant(xs, IntObjectPair::getOne, IntObjectPair::getTwo)
+                    );
+                }
+            ),
+            dynamicTest(
+                "[5, 4, 3, 2, 1] -> ([5], [4, 3, 2, 1])",
+                () -> {
+                    final var xs = Lists.immutable.with(
+                        PrimitiveTuples.pair(5, new Object()),
+                        PrimitiveTuples.pair(4, new Object()),
+                        PrimitiveTuples.pair(3, new Object()),
+                        PrimitiveTuples.pair(2, new Object()),
+                        PrimitiveTuples.pair(1, new Object())
+                    );
+
+                    assertEquals(
+                        Tuples.pair(
+                            xs.take(1).toSortedMap(IntObjectPair::getOne, IntObjectPair::getTwo).toImmutable(),
+                            xs.drop(1)
+                        ),
+                        Node.grant(xs, IntObjectPair::getOne, IntObjectPair::getTwo)
+                    );
+                }
+            ),
+            dynamicTest(
+                "[1, 3, 2, 5, 4] -> ([1, 3, 5], [2, 4])",
+                () -> {
+                    final var xs = Lists.immutable.with(
+                        PrimitiveTuples.pair(1, new Object()),
+                        PrimitiveTuples.pair(3, new Object()),
+                        PrimitiveTuples.pair(2, new Object()),
+                        PrimitiveTuples.pair(5, new Object()),
+                        PrimitiveTuples.pair(4, new Object())
+                    );
+
+                    assertEquals(
+                        Tuples.pair(
+                            Stream.of(xs.get(0), xs.get(1), xs.get(3)).collect(Collectors2.toImmutableSortedMap(IntObjectPair::getOne, IntObjectPair::getTwo)),
+                            Lists.immutable.with(xs.get(2), xs.get(4))
+                        ),
+                        Node.grant(xs, IntObjectPair::getOne, IntObjectPair::getTwo)
+                    );
+                }
+            )
+        );
+    }
 
     @TestFactory
     Stream<DynamicTest> stakeholdersByPriority() {

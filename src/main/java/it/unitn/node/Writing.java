@@ -34,6 +34,8 @@ public interface Writing {
 
     record Ack(ActorRef<Node.Write> replyTo, BigInteger version) implements Cmd {}
 
+    record Skip(BigInteger version) implements Cmd {}
+
     record Failed(Throwable cause) implements Event {}
 
     static Behavior<Msg> init(
@@ -51,14 +53,15 @@ public interface Writing {
 
         return Behaviors.withTimers(timer -> Behaviors.setup(ctx -> {
             timer.startSingleTimer(new Failed(new TimeoutException()), config.T());
-            toLock.forEach(ref -> ref.tell(new Node.Lock(ctx.getSelf().narrow(), key)));
-            return Logging.logging(ctx.getLog(), new Init(replyTo, config, node, key, value, key2node, toLock), collecting(replyTo, config, key, value, Lists.immutable.empty(), DEFAULT.version()));
+            toLock.forEach(ref -> ref.tell(new Node.Lock(node, ctx.getSelf().narrow(), key)));
+            return Logging.logging(ctx.getLog(), new Init(replyTo, config, node, key, value, key2node, toLock), collecting(replyTo, config, node, key, value, Lists.immutable.empty(), DEFAULT.version()));
         }));
     }
 
     private static MBehavior<Msg> collecting(
         ActorRef<DidOrDidnt.Put> replyTo,
         Config config,
+        int node,
         int key,
         Optional<String> value,
         ImmutableList<ActorRef<Node.Write>> locked,
@@ -66,21 +69,22 @@ public interface Writing {
     ) {
 
         if (locked.size() == config.W()) {
-            return MBehaviors.stopped(() -> {
-                final var v = version.add(BigInteger.ONE);
-                locked.forEach(ref -> ref.tell(new Node.Write(key, new Node.Word(value, v))));
+            return MBehaviors.stopped(ctx -> {
+                final var v = version.add(BigInteger.valueOf(node));
+                locked.forEach(ref -> ref.tell(new Node.Write(node, ctx.getSelf().narrow(), key, new Node.Word(value, v))));
                 replyTo.tell(new DidOrDidnt.Put.Did(v));
             });
         }
 
-        record Collecting(int key, Optional<String> value, ImmutableList<ActorRef<Node.Write>> locked, BigInteger version) {}
+        record Collecting(int node, int key, Optional<String> value, ImmutableList<ActorRef<Node.Write>> locked, BigInteger version) {}
 
-        final var state = new Collecting(key, value, locked, version);
+        final var state = new Collecting(node, key, value, locked, version);
 
         return new MBehavior<>(
             state,
             Behaviors.receive((ctx, msg) -> Logging.logging(ctx.getLog(), state, msg, switch (msg) {
-                case Ack x -> collecting(replyTo, config, key, value, locked.newWith(x.replyTo()), version.max(x.version()));
+                case Ack x -> collecting(replyTo, config, node, key, value, locked.newWith(x.replyTo()), version.max(x.version()));
+                case Skip x -> MBehaviors.stopped(() -> replyTo.tell(new DidOrDidnt.Put.Did(x.version().add(BigInteger.valueOf(node)))));
                 case Failed x -> MBehaviors.stopped(() -> replyTo.tell(new DidOrDidnt.Put.Didnt(x.cause())));
             }))
         );

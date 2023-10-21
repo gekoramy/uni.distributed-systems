@@ -21,7 +21,6 @@ import org.eclipse.collections.api.map.primitive.ImmutableIntObjectMap;
 import org.eclipse.collections.api.map.sorted.ImmutableSortedMap;
 import org.eclipse.collections.api.set.sorted.ImmutableSortedSet;
 import org.eclipse.collections.api.tuple.Pair;
-import org.eclipse.collections.api.tuple.Triple;
 import org.eclipse.collections.api.tuple.primitive.IntObjectPair;
 import org.eclipse.collections.impl.tuple.Tuples;
 
@@ -57,12 +56,16 @@ public interface Node {
 
     record Word(Optional<String> word, BigInteger version) {}
 
+    record Writer(int coordinator, ActorRef<Writing.Cmd> ref) {}
+
+    record Queue(ImmutableSortedMap<Integer, ActorRef<Writing.Cmd>> granted, ImmutableList<Writer> wrs, ImmutableList<ActorRef<Reading.DidRead>> rds) {}
+
     record State(
         int node,
         Config config,
         ImmutableSortedMap<Integer, ActorRef<Cmd>> key2node,
         ImmutableSortedMap<Integer, Word> key2word,
-        ImmutableIntObjectMap<Triple<ActorRef<Writing.Cmd>, ImmutableSortedSet<ActorRef<Writing.Cmd>>, ImmutableList<ActorRef<Reading.DidRead>>>> key2locks
+        ImmutableIntObjectMap<Queue> key2queue
     ) {}
 
     sealed interface Msg {}
@@ -109,11 +112,11 @@ public interface Node {
 
     record Put(ActorRef<DidOrDidnt.Put> replyTo, int k, Optional<String> value) implements Cmd, Common {}
 
-    record Lock(ActorRef<Writing.Cmd> replyTo, int k) implements Cmd, Common {}
+    record Lock(int coordinator, ActorRef<Writing.Cmd> replyTo, int k) implements Cmd, Common {}
 
-    record Unlock(int k, ActorRef<Writing.Cmd> who) implements Event, Common {}
+    record Unlock(int coordinator, ActorRef<Writing.Cmd> who, int k) implements Event, Common {}
 
-    record Write(int k, Word word) implements Cmd, Common {}
+    record Write(int coordinator, ActorRef<Writing.Cmd> who, int k, Word word) implements Cmd, Common {}
 
     record Read(ActorRef<Reading.DidRead> replyTo, int k) implements Cmd, Common {}
 
@@ -287,7 +290,7 @@ public interface Node {
                     s.config(),
                     key2node,
                     extract(new TreeMap<>(s.key2word().castToSortedMap()), range.gt(), range.lte()),
-                    s.key2locks()
+                    s.key2queue()
                 ));
             }
 
@@ -304,25 +307,27 @@ public interface Node {
                 // then, grant the lock
                 // otherwise, put it on hold, ie, do nothing
 
-                ctx.watchWith(x.replyTo(), new Unlock(x.k(), x.replyTo()));
+                ctx.watchWith(x.replyTo(), new Unlock(x.coordinator(), x.replyTo(), x.k()));
+                final Writer writer = new Writer(x.coordinator(), x.replyTo());
+                final Queue queue = s.key2queue().getIfAbsent(x.k(), () -> new Queue(SortedMaps.immutable.empty(), Lists.immutable.empty(), Lists.immutable.empty()));
 
-                final Triple<ActorRef<Writing.Cmd>, ImmutableSortedSet<ActorRef<Writing.Cmd>>, ImmutableList<ActorRef<Reading.DidRead>>> newLock =
-                    Optional.ofNullable(s.key2locks().get(x.k()))
-                        .map((lock) -> {
-                            final var cur = lock.getOne();
-                            final var wrs = lock.getTwo();
-                            final var rds = lock.getThree();
+                if (queue.granted().keysView().maxOptional().orElse(0) < writer.coordinator()) {
 
-                            return Tuples.triple(cur, wrs.newWith(x.replyTo()), rds);
-                        })
-                        .orElseGet(() -> {
-                            x.replyTo().tell(new Writing.Ack(
-                                ctx.getSelf().narrow(),
-                                s.key2word().getOrDefault(x.k(), DEFAULT).version()
-                            ));
+                    x.replyTo().tell(new Writing.Ack(
+                        ctx.getSelf().narrow(),
+                        s.key2word().getOrDefault(x.k(), DEFAULT).version()
+                    ));
 
-                            return Tuples.triple(x.replyTo(), SortedSets.immutable.empty(), Lists.immutable.empty());
-                        });
+                    yield same.apply(
+                        new State(
+                            s.node(),
+                            s.config(),
+                            s.key2node(),
+                            s.key2word(),
+                            s.key2queue().newWithKeyValue(x.k(), new Queue(queue.granted().newWithKeyValue(writer.coordinator(), writer.ref()), queue.wrs(), queue.rds()))
+                        )
+                    );
+                }
 
                 yield same.apply(
                     new State(
@@ -330,36 +335,29 @@ public interface Node {
                         s.config(),
                         s.key2node(),
                         s.key2word(),
-                        s.key2locks().newWithKeyValue(x.k(), newLock)
+                        s.key2queue().newWithKeyValue(x.k(), new Queue(queue.granted(), queue.wrs().newWith(writer), queue.rds()))
                     )
                 );
             }
 
             case Unlock x -> {
 
-                final var lock = s.key2locks().get(x.k());
-                final var cur = lock.getOne();
-                final var wrs = lock.getTwo();
-                final var rds = lock.getThree();
+                final var queue = s.key2queue().get(x.k());
 
-                if (!Objects.equals(cur, x.who())) {
-
-                    yield same.apply(
-                        new State(
-                            s.node(),
-                            s.config(),
-                            s.key2node(),
-                            s.key2word(),
-                            s.key2locks().newWithKeyValue(x.k(), Tuples.triple(cur, wrs.newWithout(x.who()), rds))
-                        )
-                    );
+                if (queue == null) {
+                    yield same.apply(s);
                 }
 
-                if (wrs.isEmpty()) {
+                final var writer = new Writer(x.coordinator(), x.who());
+                final var wrs = queue.wrs().newWithout(writer);
+                final var granted =
+                    Optional.ofNullable(queue.granted().get(x.coordinator())).map(x.who()::equals).orElse(false)
+                        ? queue.granted().newWithoutKey(x.coordinator())
+                        : queue.granted();
 
+                if (granted.isEmpty() && wrs.isEmpty()) {
                     final var word = s.key2word().getOrDefault(x.k(), DEFAULT);
-
-                    rds.forEach(ref -> ref.tell(new Reading.DidRead(word)));
+                    queue.rds().forEach(rd -> rd.tell(new Reading.DidRead(word)));
 
                     yield same.apply(
                         new State(
@@ -367,17 +365,27 @@ public interface Node {
                             s.config(),
                             s.key2node(),
                             s.key2word(),
-                            s.key2locks().newWithoutKey(x.k())
+                            s.key2queue().newWithoutKey(x.k())
                         )
                     );
                 }
 
-                final var min = wrs.getFirst();
+                if (granted.isEmpty()) {
+                    final var word = s.key2word().getOrDefault(x.k(), DEFAULT);
+                    final Pair<ImmutableSortedMap<Integer, ActorRef<Writing.Cmd>>, ImmutableList<Writer>> partition = grant(wrs, Writer::coordinator, Writer::ref);
 
-                min.tell(new Writing.Ack(
-                    ctx.getSelf().narrow(),
-                    s.key2word().getOrDefault(x.k(), DEFAULT).version()
-                ));
+                    partition.getOne().getLastOptional().orElseThrow().tell(new Writing.Ack(ctx.getSelf().narrow(), word.version()));
+
+                    yield same.apply(
+                        new State(
+                            s.node(),
+                            s.config(),
+                            s.key2node(),
+                            s.key2word(),
+                            s.key2queue().newWithKeyValue(x.k(), new Queue(partition.getOne(), partition.getTwo(), queue.rds()))
+                        )
+                    );
+                }
 
                 yield same.apply(
                     new State(
@@ -385,27 +393,31 @@ public interface Node {
                         s.config(),
                         s.key2node(),
                         s.key2word(),
-                        s.key2locks().newWithKeyValue(
-                            x.k(),
-                            Tuples.triple(min, wrs.newWithout(min), rds)
-                        )
+                        s.key2queue().newWithKeyValue(x.k(), new Queue(granted, wrs, queue.rds()))
                     )
                 );
             }
 
             case Write x -> switch (cmp(x.word().version(), s.key2word().getOrDefault(x.k(), DEFAULT).version())) {
 
-                case LT, EQ -> throw new AssertionError("impossible: [%s] , [%s]".formatted(s, x));
+                case LT -> same.apply(s);
+
+                case EQ -> throw new AssertionError("impossible: [%s] , [%s]".formatted(s, x));
 
                 case GT -> {
 
-                    final var lock = s.key2locks().get(x.k());
-                    final var cur = lock.getOne();
-                    final var wrs = lock.getTwo();
-                    final var rds = lock.getThree();
+                    final var queue = s.key2queue().get(x.k());
 
                     // it is safe to reply to RD
-                    rds.forEach(rd -> rd.tell(new Reading.DidRead(x.word())));
+                    queue.rds().forEach(rd -> rd.tell(new Reading.DidRead(x.word())));
+
+                    final var original = x.word().version().subtract(BigInteger.valueOf(x.coordinator()));
+
+                    final var tree = new TreeMap<>(queue.granted().castToSortedMap());
+                    final var head = tree.headMap(x.coordinator(), false);
+                    final var tail = tree.tailMap(x.coordinator(), false);
+
+                    head.forEach((ignore, wr) -> wr.tell(new Writing.Skip(original)));
 
                     yield same.apply(
                         new State(
@@ -413,7 +425,10 @@ public interface Node {
                             s.config(),
                             s.key2node(),
                             s.key2word().newWithKeyValue(x.k(), x.word()),
-                            s.key2locks().newWithKeyValue(x.k(), Tuples.triple(cur, wrs, Lists.immutable.empty()))
+                            s.key2queue().newWithKeyValue(
+                                x.k(),
+                                new Queue(SortedMaps.immutable.ofSortedMap(tail), queue.wrs(), queue.rds())
+                            )
                         )
                     );
                 }
@@ -432,17 +447,13 @@ public interface Node {
 
             case Read x -> {
 
-                final var lock = s.key2locks().get(x.k());
+                final var queue = s.key2queue().get(x.k());
 
-                if (lock == null) {
+                if (queue == null) {
                     final var word = s.key2word().getOrDefault(x.k(), DEFAULT);
                     x.replyTo().tell(new Reading.DidRead(word));
                     yield same.apply(s);
                 }
-
-                final var cur = lock.getOne();
-                final var wrs = lock.getTwo();
-                final var rds = lock.getThree().newWith(x.replyTo());
 
                 yield same.apply(
                     new State(
@@ -450,7 +461,7 @@ public interface Node {
                         s.config(),
                         s.key2node(),
                         s.key2word(),
-                        s.key2locks().newWithKeyValue(x.k(), Tuples.triple(cur, wrs, rds))
+                        s.key2queue().newWithKeyValue(x.k(), new Queue(queue.granted(), queue.wrs(), queue.rds().newWith(x.replyTo())))
                     )
                 );
             }
@@ -556,6 +567,24 @@ public interface Node {
                 }));
             })
         );
+    }
+
+    static <T, K extends Comparable<K>, V> Pair<ImmutableSortedMap<K, V>, ImmutableList<T>> grant(ImmutableList<T> xs, Function<T, K> key, Function<T, V> value) {
+        return xs.getFirstOptional()
+            .map(first -> xs
+                .drop(1)
+                .reduceInPlace(
+                    () -> Tuples.pair(SortedMaps.mutable.<K, V>of(key.apply(first), value.apply(first)), Lists.mutable.<T>empty()),
+                    (acc, x) -> {
+                        switch (cmp(key.apply(x), acc.getOne().lastKey())) {
+                            case LT, EQ -> acc.getTwo().add(x);
+                            case GT -> acc.getOne().add(Tuples.pair(key.apply(x), value.apply(x)));
+                        }
+                    }
+                )
+            )
+            .map(mut -> Tuples.pair(mut.getOne().toImmutable(), mut.getTwo().toImmutable()))
+            .orElse(Tuples.pair(SortedMaps.immutable.empty(), Lists.immutable.empty()));
     }
 
     static <V> ImmutableList<V> stakeholdersByPriority(Config config, int priority, ImmutableSortedMap<Integer, V> key2value, int key) {
