@@ -1,4 +1,6 @@
-# DHT
+# Distributed Key-Value Store in Akka Typed
+
+[Report](report.pdf)
 
 |                |                                @ |
 |----------------|---------------------------------:|
